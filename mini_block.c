@@ -70,6 +70,7 @@ static void miniblock_transfer(struct miniblock_device *dev, unsigned long secto
  */
 static void miniblock_request( struct request_queue *q)
 {
+#if 0
 	struct request *rq = blk_fetch_request( q );
 	printk( KERN_DEBUG " %s:%d\n", __FILE__, __LINE__);
 
@@ -94,6 +95,38 @@ static void miniblock_request( struct request_queue *q)
 		rq = blk_fetch_request(q) ;
 	}
 //	__blk_end_request_all( rq, 0 );
+#endif
+
+
+        struct request *req = blk_fetch_request(q);
+        while (req) {
+                unsigned block = blk_rq_pos(req);
+                unsigned count = blk_rq_cur_sectors(req);
+//                XD_INFO *disk = req->rq_disk->private_data;
+                int res = -EIO;
+                int retry;
+
+                if (req->cmd_type != REQ_TYPE_FS)
+                        goto done;
+                if (block + count > get_capacity(req->rq_disk))
+                        goto done;
+
+
+		bool	do_write = (rq_data_dir(req) == WRITE );
+		int 	size	= blk_rq_bytes( req );
+
+/*
+                for (retry = 0; (retry < XD_RETRIES) && !res; retry++)
+                        res = xd_readwrite(rq_data_dir(req), disk, req->buffer,
+                                           block, count);
+*/
+		res = 0;
+        done:  
+                /* wrap up, 0 = success, -errno = fail */
+                if (!__blk_end_request_cur(req, res))
+                        req = blk_fetch_request(q);
+        }
+
 }
 
 
