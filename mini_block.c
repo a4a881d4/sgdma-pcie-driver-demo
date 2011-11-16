@@ -180,6 +180,9 @@ static int __init miniblock_init(void)
 	printk(KERN_DEBUG "minibd: register success\n");
 
 	Miniblock = kmalloc(sizeof(struct miniblock_device), GFP_KERNEL);
+
+		bool	do_write = (rq_data_dir(rq) == WRITE );
+		int 	size	= blk_rq_bytes( rq );
 	if (Miniblock == NULL) {
 		printk(KERN_WARNING "minidb: unable to get memory with kmalloc\n");
 		goto out_unregister;
@@ -201,7 +204,7 @@ static int __init miniblock_init(void)
 	/*
 	 * request queue creation (one request per block device).
 	 */
-	miniblock_queue = blk_init_queue(miniblock_request, &Miniblock->lock);
+	miniblock_queue = blk_nit_queue(miniblock_request, &Miniblock->lock);
 	if (miniblock_queue == NULL) {
 		printk(KERN_WARNING "minibd: error in blk_init_queue\n");
 		goto out_free;
