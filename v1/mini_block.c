@@ -25,7 +25,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 #define KERNEL_SECTOR_SIZE 512 
 #define MAJOR_NUM 240 /* free mayor number, see devices.txt */
 #define MINIBD_MINORS 16 /* maximum partitions availables */
-#define N_SECTORS 3 /* number of sectors of our block device */
+#define N_SECTORS 1024 /* number of sectors of our block device */
 #define MINIBLOCK_SECTOR_SIZE 512 /* our sector size */
 
 /*
@@ -115,40 +115,6 @@ static void miniblock_request( struct request_queue *q)
 		bool	do_write = (rq_data_dir(req) == WRITE );
 		int 	size	= blk_rq_bytes( req );
 
-		printk( KERN_DEBUG " minibf: w/r=%s 0x%x at 0x%llx\n", (do_write ? "write" : "read"), size, blk_rq_pos(req)*512ULL );
-		if( rq_data_dir( req ) == READ && size <= 512)
-		{
-			struct req_iterator iter;
-			struct bio_vec *bvec;
-			/*
-			 * we are really probing at internals to determine
-			 * whether to set MSG_MORE or not...
-			 */
-			rq_for_each_segment(bvec, req, iter) {
-			       int result = 0 , idx = 0, counter;
-			       char *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)+bvec->bv_offset;
-
-			       printk( KERN_DEBUG " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
-				
-//			       result = sock_xmit(lo, 1, kaddr + bvec->bv_offset, bvec->bv_len, flags);
-//
-				for( idx = 0, counter = 1 ; idx < bvec->bv_len ; idx ++,counter ++ )
-				{
-					//((char*)kaddr)[ bvec->bv_offset + idx ] = counter;
-					((char*)kaddr)[ idx ] = counter;
-				}
-//			       kunmap(bvec->bv_page);
-				//	kaddr = 0;
-				kunmap_atomic(kaddr, KM_USER0);
-
-			}
-			printk( KERN_DEBUG " finish read \n" );
-
-
-		}else
-		{
-			printk( KERN_DEBUG " not support write or > 512\n" );
-		}
 /*
                 for (retry = 0; (retry < XD_RETRIES) && !res; retry++)
                         res = xd_readwrite(rq_data_dir(req), disk, req->buffer,
@@ -215,7 +181,8 @@ static int __init miniblock_init(void)
 
 	Miniblock = kmalloc(sizeof(struct miniblock_device), GFP_KERNEL);
 
-
+		bool	do_write = (rq_data_dir(rq) == WRITE );
+		int 	size	= blk_rq_bytes( rq );
 	if (Miniblock == NULL) {
 		printk(KERN_WARNING "minidb: unable to get memory with kmalloc\n");
 		goto out_unregister;
@@ -237,16 +204,7 @@ static int __init miniblock_init(void)
 	/*
 	 * request queue creation (one request per block device).
 	 */
-	miniblock_queue = blk_init_queue(miniblock_request, &Miniblock->lock);
-
-/*
-	miniblock_queue = blk_alloc_queue( GFP_KERNEL );
-	blk_queue_make_request( miniblock_queue, miniblock_request );
-	blk_queue_hardsect_size( miniblock_queue, MINIBLOCK_SECTOR_SIZE);
-	blk_queue_max_sectors(miniblock_queue, N_SECTORS); 
-*/
-
-
+	miniblock_queue = blk_nit_queue(miniblock_request, &Miniblock->lock);
 	if (miniblock_queue == NULL) {
 		printk(KERN_WARNING "minibd: error in blk_init_queue\n");
 		goto out_free;
@@ -296,7 +254,7 @@ static void __exit miniblock_exit(void)
 	vfree(Miniblock->data);
 	kfree(Miniblock);
 
-	printk(KERN_DEBUG "minibd: ownload with succes!\n");
+	printk(KERN_DEBUG "minibd: download with succes!\n");
 }
 	
 module_init(miniblock_init);
