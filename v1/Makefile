@@ -11,6 +11,6 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
 test:
-	sudo dmesg -c && sudo rmmod mini_block && sudo insmod mini_block.ko && sudo dmesg -c
+	sudo rmmod mini_block && sudo insmod mini_block.ko
 
 .PHONY: test
