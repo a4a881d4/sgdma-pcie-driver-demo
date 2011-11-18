@@ -1,4 +1,4 @@
-obj-m:=mini_block.o
+obj-m:=altera_drv.o
 
 
 KDIR  := /lib/modules/$(shell uname -r)/build
@@ -10,7 +10,7 @@ default:
 clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
-test:
-	sudo dmesg -c && sudo rmmod mini_block && sudo insmod mini_block.ko && sudo dmesg -c
+test: default
+	sudo dmesg -c && sudo rmmod altera_drv && sudo insmod altera_drv.ko && sudo dmesg -c
 
 .PHONY: test
