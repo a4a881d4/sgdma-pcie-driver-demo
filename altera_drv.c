@@ -42,6 +42,8 @@ MODULE_DESCRIPTION("PCI +rom/ram device driver example");
 
 static int DEVICE_MAJOR = 231;
 #define DEVICE_NAME "altera_test"
+#define MAJOR_NUM 240 /* free mayor number, see devices.txt */
+#define MAX_PARTITION_NR 16
 
 // not really necessary; for future use
 //MODULE_DEVICE_TABLE(pci, altera_pci_drv);
@@ -56,7 +58,7 @@ pci_device_id altera_pci_ids[] __devinitdata =
 
 /**************************Function Declarations*******************************************/
 // declarations for fops, pci_driver
-static int device_probe(struct pci_dev *, const struct pci_device_id *);
+static int altera_device_probe(struct pci_dev *, const struct pci_device_id *);
 static void handler_altera_device_deinit( struct pci_dev *);
 
 // block driver
@@ -68,7 +70,7 @@ static struct pci_driver altera_pci_drv =
 {
   .name= "altera",
   .id_table= altera_pci_ids,
-  .probe= device_probe,
+  .probe= altera_device_probe,
   .remove= handler_altera_device_deinit,
 };
 static struct gendisk *altera_gendisk = NULL;
@@ -116,10 +118,104 @@ static void blk_request( struct request_queue_t *q)
 		}
 */
 }
+int miniblock_ioctl (struct inode *inode, struct file *filp,
+                 unsigned int cmd, unsigned long arg)
+{
+	long size;
+	struct hd_geometry geo;
+
+	switch(cmd) {
+	/*
+	 * The only command we need to interpret is HDIO_GETGEO, since
+	 * we can't partition the drive otherwise.  We have no real
+	 * geometry, of course, so make something up.
+	 */
+	    //case HDIO_GETGEO:
+/*
+		size = Miniblock->size*(MINIBLOCK_SECTOR_SIZE/KERNEL_SECTOR_SIZE);
+		geo.cylinders = (size & ~0x3f) >> 6;
+		geo.heads = 4;
+		geo.sectors = 16;
+		geo.start = 4;
+		if (copy_to_user((void *) arg, &geo, sizeof(geo)))
+			return -EFAULT;
+		return 0;
+*/
+	}
+
+    return -ENOTTY; 
+}
+
+static struct AlteraBlockDevice{
+	unsigned long size;
+	spinlock_t lock;
+	u64 *data;
+	struct gendisk *gd;
+} * altera_block_device = NULL;
+static struct request_queue *altera_block_queue;
+static struct block_device_operations miniblock_ops = {
+    .owner           = THIS_MODULE,
+    .ioctl	     = miniblock_ioctl
+};
+
+int block_device_init( u64* ram_base, u32 mem_size )
+{
+	int ret = register_blkdev(MAJOR_NUM, DEVICE_NAME);
+	if (ret < 0) 
+	{
+		printk(KERN_WARNING "minibd: unable to get major number\n");
+		return -EBUSY;
+	}
+
+	altera_block_device = kmalloc(sizeof(struct AlteraBlockDevice), GFP_KERNEL);
+
+	if( altera_block_device == NULL )
+	{
+		printk(KERN_WARNING "minidb: unable to get memory with kmalloc\n");
+		goto out_unregister;
+	}
+	
+	memset( altera_block_device, 0, sizeof( struct AlteraBlockDevice ) );
+	altera_block_device -> size = mem_size;
+	altera_block_device -> data = ram_base;
+	spin_lock_init(&altera_block_device->lock);
+
+	altera_block_queue = blk_init_queue(altera_block_queue, &altera_block_device->lock);
+
+	if (altera_block_queue == NULL) {
+		printk(KERN_WARNING "minibd: error in blk_init_queue\n");
+		goto out_free;
+	}
+	altera_block_device->gd = alloc_disk( MAX_PARTITION_NR );
+	if (!altera_block_device->gd) {
+		printk(KERN_WARNING "minibd: error in alloc_disk\n");
+		goto out_free;
+	}
+
+	altera_block_device->gd->major = MAJOR_NUM;
+	altera_block_device->gd->first_minor = 0;
+	altera_block_device->gd->fops = &miniblock_ops;
+	altera_block_device->gd->private_data = altera_block_device;
+	snprintf(altera_block_device->gd->disk_name, 13, "%s%d", DEVICE_NAME, 0);
+	set_capacity(altera_block_device->gd, mem_size);
+	altera_block_device->gd->queue = altera_block_queue;
+
+	add_disk(altera_block_device->gd);
+	
+	return 0;
+
+out_free:
+	kfree( altera_block_device );
+out_unregister:
+	unregister_blkdev(MAJOR_NUM, DEVICE_NAME);
+
+	return -ENOMEM;
+
+}
 
 // Initialising of the module with output about the irq, I/O region and memory region.
 static
-int device_probe(struct pci_dev *dev, const struct pci_device_id *id)
+int altera_device_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 //	long iosize_0,iosize_1;
 	printk(KERN_DEBUG "altera : Device 0x%x has been found at"
@@ -156,60 +252,11 @@ int device_probe(struct pci_dev *dev, const struct pci_device_id *id)
 			printk(" there's error in ioremap \n");
 			return 0;
 		}
-		//for( idx = 0 ; idx < 0x1ffffff; idx ++ )
-//		for( idx = 0x1000000 ; idx < 0x1ffffff; idx ++ )
-
-		idx = 0x1f12345;
+		else
 		{
-//			reg = readq( ram_base );
-			//writeq( idx, ram_base );
-			reg = ram_base[ idx ];
-//			ram_base[ idx ] = 3;
-			printk(" offset %7x, = %llx\n", idx, reg); 
+			block_device_init( ram_base, iosize_0 );
 		}
 	}
-#if 0
-	{
-		printk("1\n");
-		int bar = 3;
-		if ( (pci_resource_flags (dev, bar) & IORESOURCE_MEM) == 0) {
-			dev_err(&dev->dev, "no mem resource at PCI BAR #%d, device resource flags is %x\n",bar,(pci_resource_flags(dev,bar)));
-			return -ENODEV;
-		}
-		dev_err(&dev->dev, "mem resource at PCI BAR #%d, device resource flags is 0x%llx\n",bar,(pci_resource_flags(dev,bar)));
-		printk("2\n");
-/*
-		struct resource *iomem = platform_get_resource(dev, IORESOURCE_MEM, bar);
-		if (!iomem) {
-			err = -EINVAL;
-			dev_err(&dev->dev, "no iomem ");
-			return -ENODEV;
-		}
-*/
-		int regions_err = pcim_iomap_regions(dev, 1 << bar, "altera");
-		if( regions_err )
-		{
-			dev_err( &dev->dev, " pcim_iomap_regions error , bar = %d, error = %d busy = %d", bar, regions_err, -EBUSY );
-			return -ENODEV;
-		}
-		unsigned int __iomem *  membase = pcim_iomap_table( dev )[bar];
-
-		printk(" membase addr %x\n",membase);
-		int idx = 0;
-		for( idx = 0 ; idx < 16 ; idx ++ )
-		{
-		//	writel(membase + idx, idx );
-		//	unsigned int reg = readl(membase + idx );
-//			membase[idx] = idx+1;
-//			unsigned int reg = ioread32( membase+idx );
-			unsigned int reg = membase[idx];
-			membase[idx] = idx+1;
-			printk(" offset %x, = %x\n", idx, reg); 
-		} 
-
-		pcim_iounmap_regions( dev, 1 << bar );
-	} 
-#endif
 
 	printk(" hey i'm here in probing ");
 	return (0);
@@ -228,6 +275,19 @@ handler_altera_device_deinit( struct pci_dev *pdev )
   if( memlen )
     release_mem_region( memstart, memlen );
 */
+	if(altera_block_device )
+	{
+		del_gendisk(altera_block_device->gd);
+		put_disk(altera_block_device->gd);
+
+		unregister_blkdev(MAJOR_NUM, "altera_ram");
+		blk_cleanup_queue( altera_block_queue );
+
+//		vfree(Miniblock->data);
+		kfree( altera_block_device );
+
+		printk(KERN_DEBUG "minibd: ownload with succes!\n");
+	}
   return;
 }
 
