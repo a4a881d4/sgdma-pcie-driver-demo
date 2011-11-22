@@ -40,10 +40,10 @@ MODULE_DESCRIPTION("PCI +rom/ram device driver example");
 #define VENDOR_ID 0x1172
 #define DEVICE_ID 0xe001
 
-static int DEVICE_MAJOR = 231;
 #define DEVICE_NAME "altera_test"
 #define MAJOR_NUM 240 /* free mayor number, see devices.txt */
 #define MAX_PARTITION_NR 16
+#define USE_DISK 
 
 // not really necessary; for future use
 //MODULE_DEVICE_TABLE(pci, altera_pci_drv);
@@ -58,7 +58,7 @@ pci_device_id altera_pci_ids[] __devinitdata =
 
 /**************************Function Declarations*******************************************/
 // declarations for fops, pci_driver
-static int altera_device_probe(struct pci_dev *, const struct pci_device_id *);
+static int handler_altera_device_probe(struct pci_dev *, const struct pci_device_id *);
 static void handler_altera_device_deinit( struct pci_dev *);
 
 // block driver
@@ -70,17 +70,18 @@ static struct pci_driver altera_pci_drv =
 {
   .name= "altera",
   .id_table= altera_pci_ids,
-  .probe= altera_device_probe,
+  .probe= handler_altera_device_probe,
   .remove= handler_altera_device_deinit,
 };
-static struct gendisk *altera_gendisk = NULL;
 
-static struct {
+static struct AlteraBlockDevice{
 	unsigned long size;
 	spinlock_t lock;
-	u8 *data;
+	u32  __iomem *data;
+#ifdef USE_DISK 
 	struct gendisk *gd;
-} PrivateData; 
+#endif
+} * altera_block_device = NULL;
 
 static struct request_queue *blk_queue; 
 
@@ -103,22 +104,141 @@ static irqreturn_t pci_isr( int irq, void *dev_id, struct pt_regs *regs )
 }
 static void blk_request( struct request_queue_t *q)
 {
-    struct request *req;
+	printk("\n in blk_request \n");
+        struct request *req = blk_fetch_request(q);
+        while (req) {
+		printk("\n into blk_request loop \n");
+                unsigned block = blk_rq_pos(req);
+                unsigned count = blk_rq_cur_sectors(req);
+                int res = -EIO;
+                int retry;
 
-/*
-		while ((req = elv_next_request(q)) != NULL) {
-						if (! blk_fs_request(req)) {
-										printk (KERN_NOTICE "Skip non-CMD request\n");
-										end_request(req, 0);
-										continue;
-						}
-		//				sbd_transfer(&Device, req->sector, req->current_nr_sectors,
-		//												req->buffer, rq_data_dir(req));
-		//				end_request(req, 1);
+                if (req->cmd_type != REQ_TYPE_FS)
+		{
+			printk(" blk_request == TYPE_FS \n" );
+                        goto done;
 		}
+                if (block + count > get_capacity(req->rq_disk))
+		{
+			printk(" blk_request out of size\n" );
+                        goto done;
+		}
+
+
+		bool	do_write = (rq_data_dir(req) == WRITE );
+		int 	size	= blk_rq_bytes( req );
+
+		printk( "\n " DEVICE_NAME " : w/r=%s 0x%x at 0x%llx\n", (do_write ? "write" : "read"), size, blk_rq_pos(req)*512ULL );
+		if( rq_data_dir( req ) == READ )
+		{
+			struct req_iterator iter;
+			struct bio_vec *bvec;
+			/*
+			 * we are really probing at internals to determine
+			 * whether to set MSG_MORE or not...
+			 */
+			rq_for_each_segment(bvec, req, iter) {
+			       int result = 0 , idx = 0, counter;
+			       char *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)+bvec->bv_offset;
+
+			       printk( " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
+				
+//			       result = sock_xmit(lo, 1, kaddr + bvec->bv_offset, bvec->bv_len, flags);
+//
+				printk(" %s - data address %llx\n", __FUNCTION__, altera_block_device -> data );
+				for( idx = 0, counter = 1 ; idx < bvec->bv_len - 8 ; idx ++,counter += 8 )
+				{
+					u64 reg =altera_block_device->data[ (bvec->bv_offset + idx) / 8 ];
+					(kaddr)[ idx + 0 ] = ( reg & 0x00000000000000ff ) ;
+					(kaddr)[ idx + 1 ] = ( reg & 0x000000000000ff00 ) >> 1*8;
+					(kaddr)[ idx + 2 ] = ( reg & 0x0000000000ff0000 ) >> 2*8;
+					(kaddr)[ idx + 3 ] = ( reg & 0x00000000ff000000 ) >> 3*8;
+					(kaddr)[ idx + 4 ] = ( reg & 0x000000ff00000000 ) >> 4*8;
+					(kaddr)[ idx + 5 ] = ( reg & 0x0000ff0000000000 ) >> 5*8;
+					(kaddr)[ idx + 6 ] = ( reg & 0x00ff000000000000 ) >> 6*8;
+					(kaddr)[ idx + 7 ] = ( reg & 0xff00000000000000 ) >> 7*8;
+
+//					printk( " read %llx into %llx \n", reg, (bvec->bv_offset + idx) / 8 );
+				}
+				if( 0 && bvec->bv_len % 8 != 0 )
+				{
+					char mod = bvec->bv_len % 8 ;
+					u64 reg =altera_block_device->data[ (bvec->bv_len - mod) / 8  ];
+					for( mod -- ; mod >= 0 ; mod -- )
+					{
+						(kaddr)[ bvec->bv_len - mod ] = ( reg &  (0xff00000000000000>>mod) ) >> ( 7 - mod ) ;
+					}
+
+				}
+//			       kunmap(bvec->bv_page);
+				//	kaddr = 0;
+				kunmap_atomic(kaddr, KM_USER0);
+
+			}
+			printk( KERN_DEBUG " finish read \n" );
+
+
+		}
+		else // write
+		{
+			struct req_iterator iter;
+			struct bio_vec *bvec;
+			/*
+			 * we are really probing at internals to determine
+			 * whether to set MSG_MORE or not...
+			 */
+			rq_for_each_segment(bvec, req, iter) {
+			       int result = 0 , idx = 0, counter;
+			       char *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)+bvec->bv_offset;
+
+			       printk( " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
+				
+//			       result = sock_xmit(lo, 1, kaddr + bvec->bv_offset, bvec->bv_len, flags);
+//
+				printk(" %s - data address %llx\n", __FUNCTION__, altera_block_device -> data );
+				for( idx = 0, counter = 1 ; idx < bvec->bv_len - 8 ; idx ++,counter += 8 )
+				{
+					u64 reg = 0;
+
+					int jdx = 0;
+					for( jdx = 0; jdx < 8 ; jdx ++ )
+						reg |= (kaddr)[idx+0]<<jdx;
+					altera_block_device->data[ (bvec->bv_offset + idx) / 8 ] = reg;
+				
+//					printk( " write %llx into %llx \n", reg, (bvec->bv_offset + idx) / 8 );
+				}
+				if( 0 && bvec->bv_len % 8 != 0 )
+				{
+					char mod = bvec->bv_len % 8 ;
+					u64 reg =altera_block_device->data[ (bvec->bv_len - mod) / 8  ];
+					for( mod -- ; mod >= 0 ; mod -- )
+					{
+						(kaddr)[ bvec->bv_len - mod ] = ( reg &  (0xff00000000000000>>mod) ) >> (( 7 - mod )*8) ;
+					}
+
+				}
+				kunmap_atomic(kaddr, KM_USER0);
+
+			}
+			printk( KERN_DEBUG " finish write \n" );
+
+
+		}
+/*
+                for (retry = 0; (retry < XD_RETRIES) && !res; retry++)
+                        res = xd_readwrite(rq_data_dir(req), disk, req->buffer,
+                                           block, count);
 */
+		res = 0;
+        done:  
+                /* wrap up, 0 = success, -errno = fail */
+                if (!__blk_end_request_cur(req, res))
+                        req = blk_fetch_request(q);
+        }
+
+	printk(" end blk_request \n");
 }
-int miniblock_ioctl (struct inode *inode, struct file *filp,
+int block_ioctl (struct inode *inode, struct file *filp,
                  unsigned int cmd, unsigned long arg)
 {
 	long size;
@@ -145,25 +265,18 @@ int miniblock_ioctl (struct inode *inode, struct file *filp,
 
     return -ENOTTY; 
 }
-
-static struct AlteraBlockDevice{
-	unsigned long size;
-	spinlock_t lock;
-	u64 *data;
-	struct gendisk *gd;
-} * altera_block_device = NULL;
-static struct request_queue *altera_block_queue;
-static struct block_device_operations miniblock_ops = {
+static struct request_queue *altera_block_queue = NULL;
+static struct block_device_operations altera_block__ops = {
     .owner           = THIS_MODULE,
-    .ioctl	     = miniblock_ioctl
+    .ioctl	     = block_ioctl
 };
 
-int block_device_init( u64* ram_base, u32 mem_size )
+int block_device_init( u32* ram_base, u32 mem_size )
 {
 	int ret = register_blkdev(MAJOR_NUM, DEVICE_NAME);
 	if (ret < 0) 
 	{
-		printk(KERN_WARNING "minibd: unable to get major number\n");
+		printk(KERN_WARNING "altera_drv: unable to get major number\n");
 		return -EBUSY;
 	}
 
@@ -178,29 +291,33 @@ int block_device_init( u64* ram_base, u32 mem_size )
 	memset( altera_block_device, 0, sizeof( struct AlteraBlockDevice ) );
 	altera_block_device -> size = mem_size;
 	altera_block_device -> data = ram_base;
+printk(" %s - data address %llx\n", __FUNCTION__, altera_block_device -> data );
 	spin_lock_init(&altera_block_device->lock);
 
-	altera_block_queue = blk_init_queue(altera_block_queue, &altera_block_device->lock);
+	altera_block_queue = blk_init_queue(blk_request, &altera_block_device->lock);
 
 	if (altera_block_queue == NULL) {
-		printk(KERN_WARNING "minibd: error in blk_init_queue\n");
+		printk(KERN_WARNING "altera_drv: error in blk_init_queue\n");
 		goto out_free;
 	}
+#ifdef USE_DISK
 	altera_block_device->gd = alloc_disk( MAX_PARTITION_NR );
 	if (!altera_block_device->gd) {
-		printk(KERN_WARNING "minibd: error in alloc_disk\n");
+		printk(KERN_WARNING "altera_drv: error in alloc_disk\n");
 		goto out_free;
 	}
 
 	altera_block_device->gd->major = MAJOR_NUM;
 	altera_block_device->gd->first_minor = 0;
-	altera_block_device->gd->fops = &miniblock_ops;
+	altera_block_device->gd->fops = &altera_block__ops;
 	altera_block_device->gd->private_data = altera_block_device;
 	snprintf(altera_block_device->gd->disk_name, 13, "%s%d", DEVICE_NAME, 0);
+	//strcpy(altera_block_device->gd->disk_name, DEVICE_NAME);
 	set_capacity(altera_block_device->gd, mem_size);
 	altera_block_device->gd->queue = altera_block_queue;
 
 	add_disk(altera_block_device->gd);
+#endif
 	
 	return 0;
 
@@ -215,7 +332,7 @@ out_unregister:
 
 // Initialising of the module with output about the irq, I/O region and memory region.
 static
-int altera_device_probe(struct pci_dev *dev, const struct pci_device_id *id)
+int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id *id)
 {
 //	long iosize_0,iosize_1;
 	printk(KERN_DEBUG "altera : Device 0x%x has been found at"
@@ -245,7 +362,7 @@ int altera_device_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		u32 len = pci_resource_len(dev, test_bar_nr);
 		u32 idx = 0;
 		u64 reg;
-		u64 __iomem * ram_base = ioremap_nocache(base, len);
+		u32 __iomem * ram_base = ioremap_nocache(base, len);
 
 		if( ram_base == 0 )
 		{
@@ -266,29 +383,21 @@ int altera_device_probe(struct pci_dev *dev, const struct pci_device_id *id)
 static void
 handler_altera_device_deinit( struct pci_dev *pdev )
 {
-//  unregister_blkdev (DEVICE_MAJOR, "altera");
-//  if (pdev->irq)
-//    free_irq( pdev->irq, pdev );
-/*
-  if( iolen )
-    release_region( ioport, iolen );
-  if( memlen )
-    release_mem_region( memstart, memlen );
-*/
 	if(altera_block_device )
 	{
+#ifdef USE_DISK 
 		del_gendisk(altera_block_device->gd);
 		put_disk(altera_block_device->gd);
+#endif
 
-		unregister_blkdev(MAJOR_NUM, "altera_ram");
+		unregister_blkdev(MAJOR_NUM, DEVICE_NAME);
 		blk_cleanup_queue( altera_block_queue );
 
-//		vfree(Miniblock->data);
 		kfree( altera_block_device );
 
-		printk(KERN_DEBUG "minibd: ownload with succes!\n");
+		printk(KERN_DEBUG "altera_drv: ownload with succes!\n");
 	}
-  return;
+	return;
 }
 
 static struct block_device_operations altera_block_fops = {
@@ -299,86 +408,16 @@ static struct block_device_operations altera_block_fops = {
 // device driver init/ 1st function call when insmode
 static int __init pci_drv_init(void)
 {
-  int err =0;
-  if ( err = register_blkdev(DEVICE_MAJOR,DEVICE_NAME)) {
-	  printk("ALTERA: Unable to get major %d. error number =%d\n", DEVICE_MAJOR,err);
-	  return 0;
-  }
-	// Queue
-	{
-		blk_queue = blk_init_queue(blk_request, &PrivateData.lock);
-		if (blk_queue == NULL)
-						goto out_disk;
-//		blk_queue_hardsect_size( blk_queue, hardsect_size); 
-	}
-  // register disk and fops
-  {
-		altera_gendisk = alloc_disk(1);
-
-	  if( !altera_gendisk )	goto out_disk; 
-
-		altera_gendisk -> major = DEVICE_MAJOR;
-		altera_gendisk -> first_minor = 0; 
-		altera_gendisk -> fops = &altera_block_fops;
-		altera_gendisk -> queue = blk_queue;
-
-		sprintf(altera_gendisk->disk_name, "altera_ram"); 
-
-		PrivateData.gd = altera_gendisk;
-		add_disk( altera_gendisk );
-  }
-
-  printk (KERN_CRIT "pci_chrdev_template: initialising\n");
   if( 0 == pci_register_driver(&altera_pci_drv) )
 	  return 0;
-out_queue:
-	
-out_disk:
-  unregister_blkdev( DEVICE_MAJOR, DEVICE_NAME);
-
-  return (-EIO);
+  return 0;
 }
 
 // device driver unload/ called when rmmod
 static void __exit pci_drv_exit(void)
 {
-
-	del_gendisk(altera_gendisk);
-	blk_cleanup_queue( altera_gendisk->queue ); 
-	//put_disk(altera_gendisk);
-
 	pci_unregister_driver( &altera_pci_drv );
-	unregister_blkdev( DEVICE_MAJOR, DEVICE_NAME );
 	return;
-}
-
-////////////////////////////////////// Block Driver Handle
-static int block_ioctl (struct inode *inode, struct file *filp,
-                 unsigned int cmd, unsigned long arg)
-{
-	long size;
-//	struct hd_geometry geo;
-
-	switch(cmd) {
-	/*
-	 * The only command we need to interpret is HDIO_GETGEO, since
-	 * we can't partition the drive otherwise.  We have no real
-	 * geometry, of course, so make something up.
-	 */
-	   // case HDIO_GETGEO:
-/*
-		size = Device.size*(hardsect_size/KERNEL_SECTOR_SIZE);
-		geo.cylinders = (size & ~0x3f) >> 6;
-		geo.heads = 4;
-		geo.sectors = 16;
-		geo.start = 4;
-		if (copy_to_user((void *) arg, &geo, sizeof(geo)))
-			return -EFAULT;
-		return 0;
-*/
-    }
-
-    return -ENOTTY; /* unknown command */
 }
 
 
