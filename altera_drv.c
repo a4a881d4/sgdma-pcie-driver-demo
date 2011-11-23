@@ -74,10 +74,11 @@ static struct pci_driver altera_pci_drv =
   .remove= handler_altera_device_deinit,
 };
 
-static struct AlteraBlockDevice{
+static struct AlteraBlockDevice
+{
 	unsigned long size;
 	spinlock_t lock;
-	u32  __iomem *data;
+	void  __iomem *data;
 #ifdef USE_DISK 
 	struct gendisk *gd;
 #endif
@@ -96,6 +97,39 @@ get_revision(struct pci_dev *dev)
   return (revision);
 }
 
+
+void dump_memory_in_char( volatile u32* mem, size_t n)
+{
+	int idx = 0;
+	printk(" dump address 0x%llx ",mem);
+	for( idx = 0 ; idx < n; idx ++ )
+		printk("\'%c\'", mem[idx] );
+	printk("\n");
+}
+void write_to_pci( volatile u32 __iomem * pci, u32* mem, size_t n )
+{
+
+	n = n * (sizeof( u8 ) / sizeof ( u32 ));
+	u32* pci_before = pci;
+
+	while( n -- )
+	{
+		//writeq( *mem++, pci++);
+		*pci++ = *mem++;
+	}
+	dump_memory_in_char( pci_before, 20);
+}
+void read_from_pci( volatile u32 __iomem * pci, u32* mem, size_t n )
+{
+
+	n = n * (sizeof( u8 ) / sizeof ( u32 ));
+
+	while( n -- )
+	{
+		//*mem++ = readq( pci++);
+		*mem++ = * pci++;
+	}
+}
 
 static irqreturn_t pci_isr( int irq, void *dev_id, struct pt_regs *regs )
 {
@@ -126,109 +160,30 @@ static void blk_request( struct request_queue_t *q)
 
 
 		bool	do_write = (rq_data_dir(req) == WRITE );
+
 		int 	size	= blk_rq_bytes( req );
 
-		printk( "\n " DEVICE_NAME " : w/r=%s 0x%x at 0x%llx\n", (do_write ? "write" : "read"), size, blk_rq_pos(req)*512ULL );
-		if( rq_data_dir( req ) == READ )
+
+		printk(" it will cause dump %s - %llx %llx size = %llx device size = %llx", (do_write ? "write" : "read"), altera_block_device->data, req->buffer, size, altera_block_device->size );
+		if ( do_write )
 		{
-			struct req_iterator iter;
-			struct bio_vec *bvec;
-			/*
-			 * we are really probing at internals to determine
-			 * whether to set MSG_MORE or not...
-			 */
-			rq_for_each_segment(bvec, req, iter) {
-			       int result = 0 , idx = 0, counter;
-			       char *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)+bvec->bv_offset;
-
-			       printk( " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
-				
-//			       result = sock_xmit(lo, 1, kaddr + bvec->bv_offset, bvec->bv_len, flags);
-//
-				printk(" %s - data address %llx\n", __FUNCTION__, altera_block_device -> data );
-				for( idx = 0, counter = 1 ; idx < bvec->bv_len - 8 ; idx ++,counter += 8 )
-				{
-					u64 reg =altera_block_device->data[ (bvec->bv_offset + idx) / 8 ];
-					(kaddr)[ idx + 0 ] = ( reg & 0x00000000000000ff ) ;
-					(kaddr)[ idx + 1 ] = ( reg & 0x000000000000ff00 ) >> 1*8;
-					(kaddr)[ idx + 2 ] = ( reg & 0x0000000000ff0000 ) >> 2*8;
-					(kaddr)[ idx + 3 ] = ( reg & 0x00000000ff000000 ) >> 3*8;
-					(kaddr)[ idx + 4 ] = ( reg & 0x000000ff00000000 ) >> 4*8;
-					(kaddr)[ idx + 5 ] = ( reg & 0x0000ff0000000000 ) >> 5*8;
-					(kaddr)[ idx + 6 ] = ( reg & 0x00ff000000000000 ) >> 6*8;
-					(kaddr)[ idx + 7 ] = ( reg & 0xff00000000000000 ) >> 7*8;
-
-//					printk( " read %llx into %llx \n", reg, (bvec->bv_offset + idx) / 8 );
-				}
-				if( 0 && bvec->bv_len % 8 != 0 )
-				{
-					char mod = bvec->bv_len % 8 ;
-					u64 reg =altera_block_device->data[ (bvec->bv_len - mod) / 8  ];
-					for( mod -- ; mod >= 0 ; mod -- )
-					{
-						(kaddr)[ bvec->bv_len - mod ] = ( reg &  (0xff00000000000000>>mod) ) >> ( 7 - mod ) ;
-					}
-
-				}
-//			       kunmap(bvec->bv_page);
-				//	kaddr = 0;
-				kunmap_atomic(kaddr, KM_USER0);
-
-			}
-			printk( KERN_DEBUG " finish read \n" );
-
-
-		}
-		else // write
-		{
-			struct req_iterator iter;
-			struct bio_vec *bvec;
-			/*
-			 * we are really probing at internals to determine
-			 * whether to set MSG_MORE or not...
-			 */
-			rq_for_each_segment(bvec, req, iter) {
-			       int result = 0 , idx = 0, counter;
-			       char *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)+bvec->bv_offset;
-
-			       printk( " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
-				
-//			       result = sock_xmit(lo, 1, kaddr + bvec->bv_offset, bvec->bv_len, flags);
-//
-				printk(" %s - data address %llx\n", __FUNCTION__, altera_block_device -> data );
-				for( idx = 0, counter = 1 ; idx < bvec->bv_len - 8 ; idx ++,counter += 8 )
-				{
-					u64 reg = 0;
-
-					int jdx = 0;
-					for( jdx = 0; jdx < 8 ; jdx ++ )
-						reg |= (kaddr)[idx+0]<<jdx;
-					altera_block_device->data[ (bvec->bv_offset + idx) / 8 ] = reg;
-				
-//					printk( " write %llx into %llx \n", reg, (bvec->bv_offset + idx) / 8 );
-				}
-				if( 0 && bvec->bv_len % 8 != 0 )
-				{
-					char mod = bvec->bv_len % 8 ;
-					u64 reg =altera_block_device->data[ (bvec->bv_len - mod) / 8  ];
-					for( mod -- ; mod >= 0 ; mod -- )
-					{
-						(kaddr)[ bvec->bv_len - mod ] = ( reg &  (0xff00000000000000>>mod) ) >> (( 7 - mod )*8) ;
-					}
-
-				}
-				kunmap_atomic(kaddr, KM_USER0);
-
-			}
-			printk( KERN_DEBUG " finish write \n" );
-
-
+			dump_memory_in_char( req->buffer, 20);
 		}
 /*
-                for (retry = 0; (retry < XD_RETRIES) && !res; retry++)
-                        res = xd_readwrite(rq_data_dir(req), disk, req->buffer,
-                                           block, count);
+		if ( do_write )
+			memcpy((char *)(altera_block_device->data), req->buffer, size);
+		else
+			memcpy(req->buffer, (char *)(altera_block_device->data), size);
 */
+
+		if ( do_write )
+			write_to_pci ( altera_block_device->data, req->buffer, size);
+		else
+			read_from_pci( altera_block_device->data, req->buffer, size);
+
+
+
+		printk( "\n " DEVICE_NAME " : w/r=%s 0x%x at 0x%llx\n", (do_write ? "write" : "read"), size, blk_rq_pos(req)*512ULL );
 		res = 0;
         done:  
                 /* wrap up, 0 = success, -errno = fail */
@@ -271,7 +226,7 @@ static struct block_device_operations altera_block__ops = {
     .ioctl	     = block_ioctl
 };
 
-int block_device_init( u32* ram_base, u32 mem_size )
+int block_device_init( volatile u32 __iomem* ram_base, u32 mem_size )
 {
 	int ret = register_blkdev(MAJOR_NUM, DEVICE_NAME);
 	if (ret < 0) 
@@ -295,6 +250,7 @@ printk(" %s - data address %llx\n", __FUNCTION__, altera_block_device -> data );
 	spin_lock_init(&altera_block_device->lock);
 
 	altera_block_queue = blk_init_queue(blk_request, &altera_block_device->lock);
+	blk_queue_flush( altera_block_queue, REQ_FLUSH); 
 
 	if (altera_block_queue == NULL) {
 		printk(KERN_WARNING "altera_drv: error in blk_init_queue\n");
@@ -356,13 +312,17 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 //	pci_request_region(dev, 0,"altera_ram");
 	pci_request_region(dev, test_bar_nr,"altera_rom");
 
+	pci_set_master(dev);
+
+
 	dev_err(&dev->dev, "mem resource at PCI BAR #%d, device resource flags is 0x%llx\n",1,(pci_resource_flags(dev,1)));
 	{
 		u32 base = pci_resource_start(dev, test_bar_nr);
 		u32 len = pci_resource_len(dev, test_bar_nr);
 		u32 idx = 0;
-		u64 reg;
-		u32 __iomem * ram_base = ioremap_nocache(base, len);
+		u32 reg;
+		//volatile u32 __iomem * ram_base = ioremap_nocache(base, len);
+		volatile u32 __iomem * ram_base = pci_ioremap_bar(dev, 0);
 
 		if( ram_base == 0 )
 		{
@@ -392,6 +352,10 @@ handler_altera_device_deinit( struct pci_dev *pdev )
 
 		unregister_blkdev(MAJOR_NUM, DEVICE_NAME);
 		blk_cleanup_queue( altera_block_queue );
+
+		if( altera_block_device -> data )
+			//iounmap( altera_block_device -> data);
+			pci_iounmap( pdev, altera_block_device -> data);
 
 		kfree( altera_block_device );
 
