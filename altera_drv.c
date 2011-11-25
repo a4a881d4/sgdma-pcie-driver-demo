@@ -339,6 +339,8 @@ int block_device_init( struct pci_dev *pdev )
 	}
 #endif
 
+	printk(KERN_WARNING "altera_drv: io resource start %llx\n",  pci_resource_start(pdev, DIR_BAR_NR));
+
 	if (ret < 0) 
 	{
 		printk(KERN_WARNING "altera_drv: unable to get major number\n");
