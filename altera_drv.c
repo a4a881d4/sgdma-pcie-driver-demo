@@ -52,6 +52,7 @@ MODULE_DESCRIPTION("PCI +rom/ram device driver example");
 #define USE_DISK 
 #undef USE_PURE_PCI_FUNC
 #define USE_64_ADDR
+#define SECTOR_SIZE 512
 
 
 // not really necessary; for future use
@@ -83,7 +84,7 @@ static struct pci_driver altera_pci_drv =
   .remove= handler_altera_device_deinit,
 };
 
-static struct AlteraBlockDevice
+struct AlteraBlockDevice
 {
 	unsigned long size;
 	spinlock_t lock;
@@ -211,15 +212,20 @@ static void blk_request( struct request_queue *q)
 {
 //	printk("\n in blk_request \n");
         struct request *req = blk_fetch_request(q);
-	u32 block, count;
-	int res;
+	u32 block, count, cur_bytes;
+	int res, idx, test;
 	bool do_write;
 	int size, n_elem;
+	u64 __iomem* pci_addr = 0;
+
+	struct AlteraBlockDevice* abd = NULL;
         while (req) {
 //		printk("\n into blk_request loop \n");
                 block = blk_rq_pos(req);
                 count = blk_rq_cur_sectors(req);
+		cur_bytes = blk_rq_cur_bytes(req);
                 res = -EIO;
+		
 
                 if (req->cmd_type != REQ_TYPE_FS)
 		{
@@ -241,27 +247,59 @@ static void blk_request( struct request_queue *q)
 		do_write = (rq_data_dir(req) == WRITE );
 		size	= blk_rq_bytes( req );
 
+	//	printk(" --------------- cur_bytes = %lx block = %lx count = %lx size = %lx, buffer = %lx \n", cur_bytes, block, count, size,req->buffer );
 
-//		printk(" it will cause dump %s - %x %x size = %x device size = %x", (do_write ? "write" : "read"), altera_block_device->data, req->buffer, size, altera_block_device->size );
-		if ( do_write )
+		if ( 0 && do_write )
 		{
-			//dump_memory_in_char( "just a dump", req->buffer, 20);
+			dump_memory_in_char( "before a dump", req->buffer, 20);
 		}
-/*
-		if ( do_write )
-			memcpy((char *)(altera_block_device->data), req->buffer, size);
+
+		abd = (struct AlteraBlockDevice*) ( req->rq_disk->private_data );
+		if(0)
+		for( idx = 0 ; idx < 1024; idx ++ )
+		{
+		//	iowrite32( ram_base+idx, idx );
+		//	test = ioread32( ram_base+ idx);
+		//	ram_base[idx] = idx;
+			test = *(abd->data+idx);
+			printk("in io request mem %llx = 0x%x\n", abd->data+idx, test );
+		}
+		//pci_addr = abd -> data+(block<<9);
+		pci_addr = abd -> data;
+
+		if( do_write )
+		{
+			int n = size * (sizeof( u64 ) / sizeof ( u8 ));
+			volatile u64 __iomem * copy_to = pci_addr;
+			u32 idx = 0;
+			for( idx = 0 ; idx < size ; idx ++ )
+				*(copy_to ++ ) = (u64*)( req->buffer + idx );
+		}
 		else
-			memcpy(req->buffer, (char *)(altera_block_device->data), size);
-*/
+		{
+			size_t n = size * (sizeof( u64 ) / sizeof ( u8 ));
+			volatile u64 __iomem * copy_from = pci_addr;
+			u32 idx = 0;
 
-		if ( do_write )
-			write_to_pci ( altera_block_device->data, (u32*)req->buffer, size);
-		else
-			read_from_pci( altera_block_device->data, (u32*)req->buffer, size);
+			for( idx = 0 ; idx < n; idx ++ )
+			//for( idx = 0 ; idx < 50; idx ++ )
+			{
+				//if( copy_from > abd->data && copy_from < abd->data+abd->size )
+				if( (copy_from - abd->data) < 4096 && copy_from>=abd->data )
+				{
+					printk("in io request mem2 %llx = 0x%x\n", copy_from, *(copy_from));
+					 *((u64*)( req->buffer + idx )) = *(copy_from);
+				}
+				else
+					printk(" out of memory \n");
+
+				printk(" just try to read 0x%lx\n",copy_from);
+				copy_from ++;
+			}
+
+		}
 
 
-
-//		printk( "\n " DEVICE_NAME " : w/r=%s 0x%x at 0x%llx\n", (do_write ? "write" : "read"), size, blk_rq_pos(req)*512ULL );
 		res = 0;
         done:  
                 /* wrap up, 0 = success, -errno = fail */
@@ -284,7 +322,7 @@ int block_ioctl (struct inode *inode, struct file *filp,
 	 * geometry, of course, so make something up.
 	 */
 	    case HDIO_GETGEO:
-		geo.sectors = 32;
+		geo.sectors = SECTOR_SIZE;
 		geo.start = 0;
 		geo.heads = 64;
 
@@ -326,18 +364,29 @@ int block_device_init( struct pci_dev *pdev )
 	void __iomem * csr_base = ioremap_nocache( pci_resource_start(pdev, CSR_BAR_NR), pci_resource_len(pdev, CSR_BAR_NR));
 #endif
 
-#if 0
+	printk(" in blk device init pci=%lx - ram_base=%lx length=%lx\n", ram_base, pci_resource_start(pdev, DIR_BAR_NR), pci_resource_len(pdev, DIR_BAR_NR) );
 	{
 		int idx = 0, test = 0;;
-		for( idx = 0 ; idx < 1 ; idx ++ )
+		for( idx = 0 ; idx < 1024; idx ++ )
 		{
-			iowrite32( ram_base+idx, idx );
-			test = ioread32( ram_base+ idx);
-			printk(" pci mem %llx = 0x%x\n", ram_base+idx, test );
+		//	iowrite32( ram_base+idx, idx );
+		//	test = ioread32( ram_base+ idx);
+		//	ram_base[idx] = idx;
+			test = *(ram_base+idx);
+			printk("before pci mem %llx = 0x%x\n", ram_base+idx, test );
 		}
+/*
+		for( idx = 0 ; idx < 4 ; idx ++ )
+		{
+		//	iowrite32( ram_base+idx, idx );
+		//	test = ioread32( ram_base+ idx);
+			*(ram_base+idx) = idx+3;
+			test = ram_base[idx];
+			printk("after pci mem %llx = 0x%x\n", ram_base+idx, test );
+		}
+*/
 
 	}
-#endif
 
 	printk(KERN_WARNING "altera_drv: io resource start %llx\n",  pci_resource_start(pdev, DIR_BAR_NR));
 
@@ -364,7 +413,7 @@ int block_device_init( struct pci_dev *pdev )
 	spin_lock_init(&altera_block_device->lock);
 
 	altera_block_queue = blk_init_queue( blk_request, &altera_block_device->lock );
-	blk_queue_flush( altera_block_queue, REQ_FLUSH ); 
+//	blk_queue_flush( altera_block_queue, REQ_FLUSH ); 
 
 	if (altera_block_queue == NULL) {
 		printk(KERN_WARNING "altera_drv: error in blk_init_queue\n");
@@ -384,7 +433,10 @@ int block_device_init( struct pci_dev *pdev )
 	//snprintf(altera_block_device->gd->disk_name, 13, "%s%d", DEVICE_NAME, 0);
 	sprintf(altera_block_device->gd->disk_name, "%s%d", DEVICE_NAME, 0);
 	//strcpy(altera_block_device->gd->disk_name, DEVICE_NAME);
+	//
 	set_capacity( altera_block_device->gd, pci_resource_len(pdev, DIR_BAR_NR)>>10 );
+	printk(" altera_block disk capacity = %x\n",get_capacity( altera_block_device->gd));
+
 	altera_block_device->gd->queue = altera_block_queue;
 
 	add_disk(altera_block_device->gd);
@@ -423,7 +475,30 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 	}
 
 	
+	if(1)
 	{
+		void __iomem * ram_base = ioremap_nocache( pci_resource_start(dev, DIR_BAR_NR), pci_resource_len(dev, DIR_BAR_NR) );
+		printk("<0> resource_start ==> %lx, ram_base =%lx\n", pci_resource_start(dev,DIR_BAR_NR), ram_base );
+
+		volatile u64 *p;
+		int idx = 0;
+//		p = ioremap( ram_base, pci_resource_len(dev, DIR_BAR_NR) );
+		p = ram_base;
+		
+		//for( idx = 0 ; idx < pci_resource_len(dev, DIR_BAR_NR) ; idx ++ )
+		for( idx = 0 ; idx < 1024; idx ++ )
+		{
+			*(p+idx) = idx;
+			if( *(p+idx) != idx )
+				printk(" %lx error ", (p+idx));
+			else
+				printk(" %lx pass ", (p+idx));
+			printk("\n");
+		}
+		printk("<0> CIH ==> %x\n", *p);
+
+		iounmap( ram_base );
+
 		printk(" ------------->bar01 0x%lx \n", pci_resource_flags(dev, 0) );
 		printk(" ------------->bar 2 0x%lx \n", pci_resource_flags(dev, 2) );
 	}	
@@ -508,9 +583,11 @@ handler_altera_device_deinit( struct pci_dev *pdev )
 // device driver init/ 1st function call when insmode
 static int __init pci_drv_init(void)
 {
-  if( 0 == pci_register_driver(&altera_pci_drv) )
-	  return 0;
-  return 0;
+	printk(KERN_DEBUG "altera_drv: installing !\n");
+	
+	if( 0 == pci_register_driver(&altera_pci_drv) )
+		return 0;
+	return 0;
 }
 
 // device driver unload/ called when rmmod
