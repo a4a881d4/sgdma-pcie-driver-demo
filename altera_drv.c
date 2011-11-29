@@ -52,6 +52,7 @@ MODULE_DESCRIPTION("PCI +rom/ram device driver example");
 #define USE_DISK 
 #undef USE_PURE_PCI_FUNC
 #define USE_64_ADDR
+
 #define SECTOR_SIZE 512
 
 
@@ -131,84 +132,6 @@ void dump_memory_in_char( const char* str, volatile u32* mem, size_t n)
 		printk("\'%c\'", mem[idx] );
 	printk("\n");
 }
-#if 0
-void dump_memory_in_char2( const char* str, volatile u64 __iomem* mem, size_t n)
-{
-	int idx = 0;
-	printk(" (%s) dump address 0x%llx ",str,mem);
-	for( idx = 0 ; idx < n; idx ++ )
-		printk("\'%c\'", (char) ioread32( mem+idx ) );
-	printk("\n");
-}
-#endif
-#ifdef USE_64_ADDR
-void write_to_pci( volatile u64 __iomem * pci, u32* mem, size_t n )
-#else
-void write_to_pci( volatile u32 __iomem * pci, u32* mem, size_t n )
-#endif
-{
-	n = n * (sizeof( u8 ) / sizeof ( u32 ));
-	memcpy_toio(pci, mem, n);
-	return;
-
-#ifdef USE_64_ADDR
-	volatile u64 __iomem * pci_before = pci;
-#else
-	volatile u32 __iomem * pci_before = pci;
-#endif
-	u32* mem_before = mem;
-
-	n = n * (sizeof( u8 ) / sizeof ( u32 ));
-
-	while( n -- )
-	{
-		//writeq( *mem++, pci++);
-		//writel( *mem++, pci++);
-#ifdef USE_64_ADDR
-	//	*pci++ = (u64) * mem++;
-		iowrite32(*mem++, pci++);
-		wmb(  );
-#else
-		*pci++ = *mem++;
-#endif
-	}
-	wmb();
-//	dump_memory_in_char( "memory before ", mem_before, 20);
-//	dump_memory_in_char2( "pci after ", pci_before, 20);
-}
-#ifdef USE_64_ADDR
-void read_from_pci( volatile u64 __iomem * pci, u32* mem, size_t n )
-#else
-void read_from_pci( volatile u32 __iomem * pci, u32* mem, size_t n )
-#endif
-{
-	n = n * (sizeof( u8 ) / sizeof ( u32 ));
-	memcpy_fromio(mem, pci, n);
-	return;
-
-	n = n * (sizeof( u8 ) / sizeof ( u32 ));
-
-	while( n -- )
-	{
-		//*mem++ = readl( pci++);
-		//*mem++ = * pci++;
-#ifdef USE_64_ADDR
-		//*mem++ = (u64) * pci++;
-		*mem++ = ioread32(pci++);
-		rmb(  );
-#else
-		*mem++ = * pci++;
-#endif
-	}
-}
-
-/*
-static irqreturn_t pci_isr( int irq, void *dev_id, struct pt_regs *regs )
-{
-  // nothing todo for the irq yet
-  return (IRQ_HANDLED);
-}
-*/
 
 static void blk_request( struct request_queue *q)
 {
@@ -264,25 +187,14 @@ static void blk_request( struct request_queue *q)
 				test = *(abd->data+idx);
 				printk("in io request mem %llx = 0x%x        \n", abd->data+idx, test );
 			}
-//			dump_memory_in_char( "in pci ", abd->data, 20);
 			printk("\n");
 		}
-		//pci_addr = abd -> data+(block<<9);
-		pci_addr = abd -> data;
 
-#if 0
-		if( do_write )
-		{
-			memcpy(req->buffer, (char *)pci_addr, 512);
-		}
+		if( block < 0x3ff0 )
+			pci_addr = abd -> data+(block<<9) ;
 		else
-		{
-//			if( size == 512 )
-				iomemcpy((char *)pci_addr, req->buffer, size);
-//			else
-//				printk("in read  size = %d\n", size );
-		}
-#endif
+			pci_addr = abd -> data;
+
 		if( do_write )
 		{
 			int n = size / ( (sizeof( u64) / sizeof ( u8 )) );
@@ -290,7 +202,7 @@ static void blk_request( struct request_queue *q)
 			u32 idx = 0;
 
 
-			for( idx = 0 ; idx < ( n>1024?1024:n) ; idx ++ )
+			for( idx = 0 ; idx <  n ; idx ++ )
 			{
 				if( copy_to >= abd -> data && ( copy_to < (abd->data+abd->data_length)))
 					*(copy_to) =*( (u64*)( req->buffer + idx ));
@@ -306,8 +218,9 @@ static void blk_request( struct request_queue *q)
 			volatile u64 __iomem * copy_from = pci_addr;
 			u32 idx = 0;
 
-			//for( idx = 0 ; idx < n; idx ++ )
-			for( idx = 0 ; idx < ( n>1024?1024:n) ; idx ++ )
+			printk(" read = 0x%lx size = %d n = %d\n", copy_from, size, n );
+
+			for( idx = 0 ; idx < n; idx ++ )
 			{
 				if( copy_from >= abd -> data && ( copy_from < (abd->data+abd->data_length)))
 					*((u64*)( req->buffer + idx )) = *(copy_from);
@@ -327,14 +240,13 @@ static void blk_request( struct request_queue *q)
 			}
 //			dump_memory_in_char( "in pci ", abd->data, 20);
 			printk("\n");
-		}
-
+		} 
 
 		res = 0;
-        done:  
-                /* wrap up, 0 = success, -errno = fail */
-                if (!__blk_end_request_cur(req, res))
-                        req = blk_fetch_request(q);
+	        done:  
+       		         /* wrap up, 0 = success, -errno = fail */
+               		 if (!__blk_end_request_cur(req, res))
+                        	req = blk_fetch_request(q);
         }
 
 //	printk(" end blk_request \n");
@@ -352,6 +264,7 @@ int block_ioctl (struct inode *inode, struct file *filp,
 	 * geometry, of course, so make something up.
 	 */
 	    case HDIO_GETGEO:
+		printk(" some one wanna get geo \n");
 		geo.sectors = SECTOR_SIZE;
 		geo.start = 0;
 		geo.heads = 64;
@@ -374,25 +287,9 @@ static struct block_device_operations altera_block_fops = {
 int block_device_init( struct pci_dev *pdev )
 {
 	int ret = register_blkdev(MAJOR_NUM, DEVICE_NAME);
+	resource_size_t res_size = pci_resource_len(pdev, DIR_BAR_NR) - 1024;
 
-#ifdef USE_PURE_PCI_FUNC
-
-#ifdef USE_64_ADDR
-	u64  __iomem * ram_base = pci_ioremap_bar( pdev, DIR_BAR_NR);
-#else
-	void __iomem * ram_base = pci_ioremap_bar( pdev, DIR_BAR_NR);
-#endif
-	void __iomem * csr_base = pci_ioremap_bar( pdev, CSR_BAR_NR);
-#else
-
-#ifdef USE_64_ADDR
-	u64 __iomem * ram_base = ioremap_nocache( pci_resource_start(pdev, DIR_BAR_NR), pci_resource_len(pdev, DIR_BAR_NR) );
-//	u64 __iomem * ram_base = ioremap( pci_resource_start(pdev, DIR_BAR_NR), pci_resource_len(pdev, DIR_BAR_NR) );
-#else
-	void __iomem * ram_base = ioremap_nocache( pci_resource_start(pdev, DIR_BAR_NR), pci_resource_len(pdev, DIR_BAR_NR) );
-#endif
-	void __iomem * csr_base = ioremap_nocache( pci_resource_start(pdev, CSR_BAR_NR), pci_resource_len(pdev, CSR_BAR_NR));
-#endif
+	u64 __iomem * ram_base = ioremap_nocache( pci_resource_start(pdev, DIR_BAR_NR), res_size );
 
 	printk(" in blk device init pci=%lx - ram_base=%lx length=%lx\n", ram_base, pci_resource_start(pdev, DIR_BAR_NR), pci_resource_len(pdev, DIR_BAR_NR) );
 	{
@@ -437,7 +334,7 @@ int block_device_init( struct pci_dev *pdev )
 	memset( altera_block_device, 0, sizeof( struct AlteraBlockDevice ) );
 	altera_block_device -> data_length = pci_resource_len(pdev, DIR_BAR_NR);
 	altera_block_device -> data = ram_base;
-	altera_block_device -> csr  = csr_base;
+//	altera_block_device -> csr  = csr_base;
 
 //	printk(" %s - data address %x\n", __FUNCTION__, altera_block_device -> data );
 	spin_lock_init(&altera_block_device->lock);
@@ -464,7 +361,7 @@ int block_device_init( struct pci_dev *pdev )
 	sprintf(altera_block_device->gd->disk_name, "%s%d", DEVICE_NAME, 0);
 	//strcpy(altera_block_device->gd->disk_name, DEVICE_NAME);
 	//
-	set_capacity( altera_block_device->gd, pci_resource_len(pdev, DIR_BAR_NR)>>10 );
+	set_capacity( altera_block_device->gd, res_size>>10 );
 	printk(" altera_block disk capacity = %x\n",get_capacity( altera_block_device->gd));
 
 	altera_block_device->gd->queue = altera_block_queue;
@@ -505,18 +402,18 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 	}
 
 	
-	if(1)
+	if(0)
 	{
 		void __iomem * ram_base = ioremap_nocache( pci_resource_start(dev, DIR_BAR_NR), pci_resource_len(dev, DIR_BAR_NR) );
 		printk("<0> resource_start ==> %lx, ram_base =%lx\n", pci_resource_start(dev,DIR_BAR_NR), ram_base );
 
 		volatile u64 *p;
-		int idx = 0;
+		int idx = 0, block = 0x3ffe;
 //		p = ioremap( ram_base, pci_resource_len(dev, DIR_BAR_NR) );
-		p = ram_base;
+		p = ram_base + (block << 9);
 		
-		//for( idx = 0 ; idx < pci_resource_len(dev, DIR_BAR_NR) ; idx ++ )
-		for( idx = 0 ; idx < 1024; idx ++ )
+
+		for( idx = 0 ; idx < 512; idx ++ )
 		{
 			*(p+idx) = idx;
 			if( *(p+idx) != idx )
@@ -525,7 +422,6 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 				printk(" %lx pass ", (p+idx));
 			printk("\n");
 		}
-		printk("<0> CIH ==> %x\n", *p);
 
 		iounmap( ram_base );
 
@@ -538,11 +434,13 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 
 //	printk(" bar0 %d, bar1 %d\n",iosize_0, iosize_1);
 
+/*
 	if (pci_set_dma_mask(dev, DMA_BIT_MASK(64)) &&
 			pci_set_dma_mask(dev, DMA_BIT_MASK(32))) {
 		dev_printk(KERN_WARNING, &dev->dev, "NO suitable DMA found\n");
 		return  -ENOMEM;
 	}
+*/
 
 
 	printk(" before pci_request_region \n");
@@ -589,14 +487,13 @@ handler_altera_device_deinit( struct pci_dev *pdev )
 
 		if( altera_block_device -> data )
 		{
-#ifdef USE_PURE_PCI_FUNC
+#if 0
 			pci_iounmap( pdev, altera_block_device -> data);
 			pci_iounmap( pdev, altera_block_device -> csr );
 #else
 			iounmap( altera_block_device -> data );
-			iounmap( altera_block_device -> csr  );
+//			iounmap( altera_block_device -> csr  );
 #endif
-//			pci_iounmap( pdev, altera_block_device -> data);
 		}
 
 		kfree( altera_block_device );
@@ -606,6 +503,8 @@ handler_altera_device_deinit( struct pci_dev *pdev )
 	pci_release_region( pdev, DIR_BAR_NR );
 	pci_release_region( pdev, CSR_BAR_NR );
 	pci_disable_device( pdev ); 
+
+	kfree( altera_block_device );
 
 	return;
 }
