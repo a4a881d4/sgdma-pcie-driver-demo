@@ -86,7 +86,7 @@ static struct pci_driver altera_pci_drv =
 
 struct AlteraBlockDevice
 {
-	unsigned long size;
+	unsigned long data_length;
 	spinlock_t lock;
 
 #ifdef USE_64_ADDR
@@ -131,6 +131,7 @@ void dump_memory_in_char( const char* str, volatile u32* mem, size_t n)
 		printk("\'%c\'", mem[idx] );
 	printk("\n");
 }
+#if 0
 void dump_memory_in_char2( const char* str, volatile u64 __iomem* mem, size_t n)
 {
 	int idx = 0;
@@ -139,6 +140,7 @@ void dump_memory_in_char2( const char* str, volatile u64 __iomem* mem, size_t n)
 		printk("\'%c\'", (char) ioread32( mem+idx ) );
 	printk("\n");
 }
+#endif
 #ifdef USE_64_ADDR
 void write_to_pci( volatile u64 __iomem * pci, u32* mem, size_t n )
 #else
@@ -171,8 +173,8 @@ void write_to_pci( volatile u32 __iomem * pci, u32* mem, size_t n )
 #endif
 	}
 	wmb();
-	dump_memory_in_char( "memory before ", mem_before, 20);
-	dump_memory_in_char2( "pci after ", pci_before, 20);
+//	dump_memory_in_char( "memory before ", mem_before, 20);
+//	dump_memory_in_char2( "pci after ", pci_before, 20);
 }
 #ifdef USE_64_ADDR
 void read_from_pci( volatile u64 __iomem * pci, u32* mem, size_t n )
@@ -249,54 +251,82 @@ static void blk_request( struct request_queue *q)
 
 	//	printk(" --------------- cur_bytes = %lx block = %lx count = %lx size = %lx, buffer = %lx \n", cur_bytes, block, count, size,req->buffer );
 
-		if ( 0 && do_write )
+		if ( 1 && do_write )
 		{
 			dump_memory_in_char( "before a dump", req->buffer, 20);
 		}
 
 		abd = (struct AlteraBlockDevice*) ( req->rq_disk->private_data );
-		if(0)
-		for( idx = 0 ; idx < 1024; idx ++ )
+		if(1 && do_write)
 		{
-		//	iowrite32( ram_base+idx, idx );
-		//	test = ioread32( ram_base+ idx);
-		//	ram_base[idx] = idx;
-			test = *(abd->data+idx);
-			printk("in io request mem %llx = 0x%x\n", abd->data+idx, test );
+			for( idx = 0 ; idx < 10; idx ++ )
+			{
+				test = *(abd->data+idx);
+				printk("in io request mem %llx = 0x%x        \n", abd->data+idx, test );
+			}
+//			dump_memory_in_char( "in pci ", abd->data, 20);
+			printk("\n");
 		}
 		//pci_addr = abd -> data+(block<<9);
 		pci_addr = abd -> data;
 
+#if 0
 		if( do_write )
 		{
-			int n = size * (sizeof( u64 ) / sizeof ( u8 ));
-			volatile u64 __iomem * copy_to = pci_addr;
-			u32 idx = 0;
-			for( idx = 0 ; idx < size ; idx ++ )
-				*(copy_to ++ ) = (u64*)( req->buffer + idx );
+			memcpy(req->buffer, (char *)pci_addr, 512);
 		}
 		else
 		{
-			size_t n = size * (sizeof( u64 ) / sizeof ( u8 ));
+//			if( size == 512 )
+				iomemcpy((char *)pci_addr, req->buffer, size);
+//			else
+//				printk("in read  size = %d\n", size );
+		}
+#endif
+		if( do_write )
+		{
+			int n = size / ( (sizeof( u64) / sizeof ( u8 )) );
+			volatile u64 __iomem * copy_to = pci_addr;
+			u32 idx = 0;
+
+
+			for( idx = 0 ; idx < ( n>1024?1024:n) ; idx ++ )
+			{
+				if( copy_to >= abd -> data && ( copy_to < (abd->data+abd->data_length)))
+					*(copy_to) =*( (u64*)( req->buffer + idx ));
+				else
+					printk("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! memory write out of range (size=%d), (copy_to=0x%lx) (base=0x%lx)\n",size, copy_to, pci_addr);
+				copy_to ++;
+			}
+			printk(" copy_to = 0x%lx size = %d\n", copy_to, size );
+		}
+		else
+		{
+			size_t n = size / ( (sizeof( u64 ) / sizeof ( u8 )) );
 			volatile u64 __iomem * copy_from = pci_addr;
 			u32 idx = 0;
 
-			for( idx = 0 ; idx < n; idx ++ )
-			//for( idx = 0 ; idx < 50; idx ++ )
+			//for( idx = 0 ; idx < n; idx ++ )
+			for( idx = 0 ; idx < ( n>1024?1024:n) ; idx ++ )
 			{
-				//if( copy_from > abd->data && copy_from < abd->data+abd->size )
-				if( (copy_from - abd->data) < 4096 && copy_from>=abd->data )
-				{
-					printk("in io request mem2 %llx = 0x%x\n", copy_from, *(copy_from));
-					 *((u64*)( req->buffer + idx )) = *(copy_from);
-				}
+				if( copy_from >= abd -> data && ( copy_from < (abd->data+abd->data_length)))
+					*((u64*)( req->buffer + idx )) = *(copy_from);
 				else
-					printk(" out of memory \n");
-
-				printk(" just try to read 0x%lx\n",copy_from);
+					printk("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! memory read out of range (size=%d), (copy_to=0x%lx) (base=0x%lx)\n",size, copy_from, pci_addr);
 				copy_from ++;
 			}
 
+		}
+
+		if ( 1 && do_write )
+		{
+			for( idx = 0 ; idx < 10; idx ++ )
+			{
+				test = *(abd->data+idx);
+				printk("in io request mem %llx = 0x%x        \n", abd->data+idx, test );
+			}
+//			dump_memory_in_char( "in pci ", abd->data, 20);
+			printk("\n");
 		}
 
 
@@ -326,7 +356,7 @@ int block_ioctl (struct inode *inode, struct file *filp,
 		geo.start = 0;
 		geo.heads = 64;
 
-		geo.cylinders = (altera_block_device->size / (geo.sectors*geo.heads)*4 );
+		geo.cylinders = (altera_block_device->data_length / (geo.sectors*geo.heads)*4 );
 		if (copy_to_user((void *) arg, &geo, sizeof(geo)))
 			return -EFAULT;
 		return 0;
@@ -405,7 +435,7 @@ int block_device_init( struct pci_dev *pdev )
 	}
 	
 	memset( altera_block_device, 0, sizeof( struct AlteraBlockDevice ) );
-//	altera_block_device -> size = mem_size;
+	altera_block_device -> data_length = pci_resource_len(pdev, DIR_BAR_NR);
 	altera_block_device -> data = ram_base;
 	altera_block_device -> csr  = csr_base;
 
