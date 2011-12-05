@@ -10,6 +10,27 @@
 #include <linux/blkdev.h>
 #include <linux/hdreg.h>
 #include <linux/vmalloc.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/init.h>
+#include <linux/pci.h>
+#include <linux/slab.h>
+#include <linux/spinlock.h>
+#include <linux/blkdev.h>
+#include <linux/sched.h>
+#include <linux/interrupt.h>
+#include <linux/compiler.h>
+#include <linux/workqueue.h>
+#include <linux/bitops.h>
+#include <linux/delay.h>
+#include <linux/time.h>
+#include <linux/hdreg.h>
+#include <linux/dma-mapping.h>
+#include <linux/completion.h>
+#include <linux/scatterlist.h>
+#include <asm/io.h>
+#include <asm/uaccess.h>
+
 
 
 /* **************************************************************
@@ -90,43 +111,19 @@ struct AlteraBlockDevice
 	unsigned long data_length;
 	spinlock_t lock;
 
-#ifdef USE_64_ADDR
 	u64 __iomem *data;
-#else
-	void  __iomem *data;
-#endif
-
-
 	void  __iomem *csr;
 
-
-#ifdef USE_DISK 
 	struct gendisk *gd;
-#endif
 
 	struct scatterlist              sg[ALT_MAX_REQ_SG];
 
 } * altera_block_device = NULL;
 
-//static struct request_queue *blk_queue; 
-
-/**************************Structure Define (end)*************************************/
-// example for reading a PCI config byte
-/*
-static unsigned char
-get_revision(struct pci_dev *dev)
-{
-  u8 revision;
-
-  pci_read_config_byte(dev, PCI_REVISION_ID, &revision);
-  return (revision);
-}*/
-
 
 void dump_memory_in_char( const char* str, volatile u32* mem, size_t n)
 {
 	int idx = 0;
-//	printk(" (%s) dump address 0x%lx ",str,mem);
 	printk(" (%s) dump  ",str);
 	for( idx = 0 ; idx < n; idx ++ )
 		printk("\'%c\'", mem[idx] );
@@ -163,7 +160,6 @@ static void blk_request( struct request_queue *q)
                         goto done;
 		}
 
-		sg_init_table( altera_block_device->sg, ALT_MAX_REQ_SG);
 
 //		n_elem = blk_rq_map_sg(q, req, altera_block_device->sg ); 
 //		n_elem = pci_map_sg(host->pdev, sg, n_elem, pci_dir);
@@ -197,6 +193,7 @@ static void blk_request( struct request_queue *q)
 
 		if( do_write )
 		{
+#if 0
 			int n = size / ( (sizeof( u64) / sizeof ( u8 )) );
 			volatile u64 __iomem * copy_to = pci_addr;
 			u32 idx = 0;
@@ -211,9 +208,11 @@ static void blk_request( struct request_queue *q)
 				copy_to ++;
 			}
 			printk(" copy_to = 0x%lx size = %d\n", copy_to, size );
+#endif
 		}
 		else
 		{
+/*
 			size_t n = size / ( (sizeof( u64 ) / sizeof ( u8 )) );
 			volatile u64 __iomem * copy_from = pci_addr;
 			u32 idx = 0;
@@ -228,6 +227,31 @@ static void blk_request( struct request_queue *q)
 					printk("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! memory read out of range (size=%d), (copy_to=0x%lx) (base=0x%lx)\n",size, copy_from, pci_addr);
 				copy_from ++;
 			}
+*/
+			struct req_iterator iter;
+			struct bio_vec *bvec;
+			/*
+			 * we are really probing at internals to determine
+			 * whether to set MSG_MORE or not...
+			 */
+			rq_for_each_segment(bvec, req, iter) {
+			       int result = 0 , idx = 0, counter;
+			       u64 *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)   +   bvec->bv_offset;
+
+			       printk( KERN_DEBUG " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
+				
+//			       result = sock_xmit(lo, 1, kaddr + bvec->bv_offset, bvec->bv_len, flags);
+//
+				for( idx = 0, counter = 1 ; idx < (bvec->bv_len/(sizeof(u64))) ; idx ++,counter ++ )
+				{
+					kaddr[ idx ] = pci_addr[ idx ];
+				}
+//			       kunmap(bvec->bv_page);
+				//	kaddr = 0;
+				kunmap_atomic(kaddr, KM_USER0);
+
+			}
+			printk( KERN_DEBUG " finish read \n" );
 
 		}
 
@@ -284,12 +308,25 @@ static struct block_device_operations altera_block_fops = {
     .ioctl	     = block_ioctl
 };
 
+/*
+ *  * Map (physical) PCI mem into (virtual) kernel space
+ *   */
+static void __iomem *remap_pci_mem(ulong base, ulong size)
+{
+        ulong page_base        = ((ulong) base) & PAGE_MASK;
+        ulong page_offs        = ((ulong) base) - page_base;
+        void __iomem *page_remapped    = ioremap(page_base, page_offs+size);
+
+        return (page_remapped ? (page_remapped + page_offs) : NULL);
+}
+
 int block_device_init( struct pci_dev *pdev )
 {
 	int ret = register_blkdev(MAJOR_NUM, DEVICE_NAME);
-	resource_size_t res_size = pci_resource_len(pdev, DIR_BAR_NR) - 1024;
+	resource_size_t res_size = pci_resource_len(pdev, DIR_BAR_NR) / 2;
 
-	u64 __iomem * ram_base = ioremap_nocache( pci_resource_start(pdev, DIR_BAR_NR), res_size );
+	//u64 __iomem * ram_base = ioremap_nocache( pci_resource_start(pdev, DIR_BAR_NR), res_size );
+	u64 __iomem * ram_base = remap_pci_mem( pci_resource_start(pdev, DIR_BAR_NR), res_size );
 
 	printk(" in blk device init pci=%lx - ram_base=%lx length=%lx\n", ram_base, pci_resource_start(pdev, DIR_BAR_NR), pci_resource_len(pdev, DIR_BAR_NR) );
 	{
@@ -361,12 +398,14 @@ int block_device_init( struct pci_dev *pdev )
 	sprintf(altera_block_device->gd->disk_name, "%s%d", DEVICE_NAME, 0);
 	//strcpy(altera_block_device->gd->disk_name, DEVICE_NAME);
 	//
-	set_capacity( altera_block_device->gd, res_size>>10 );
+	set_capacity( altera_block_device->gd, (res_size>>10)/2 );
 	printk(" altera_block disk capacity = %x\n",get_capacity( altera_block_device->gd));
 
 	altera_block_device->gd->queue = altera_block_queue;
 
 	add_disk(altera_block_device->gd);
+
+	sg_init_table( altera_block_device->sg, ALT_MAX_REQ_SG);
 #endif
 	
 	return 0;
@@ -408,7 +447,7 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 		printk("<0> resource_start ==> %lx, ram_base =%lx\n", pci_resource_start(dev,DIR_BAR_NR), ram_base );
 
 		volatile u64 *p;
-		int idx = 0, block = 0x3ffe;
+		int idx = 0, block = 0x0;
 //		p = ioremap( ram_base, pci_resource_len(dev, DIR_BAR_NR) );
 		p = ram_base + (block << 9);
 		
@@ -491,7 +530,8 @@ handler_altera_device_deinit( struct pci_dev *pdev )
 			pci_iounmap( pdev, altera_block_device -> data);
 			pci_iounmap( pdev, altera_block_device -> csr );
 #else
-			iounmap( altera_block_device -> data );
+			pci_iounmap( pdev, altera_block_device -> data);
+		//	iounmap( altera_block_device -> data );
 //			iounmap( altera_block_device -> csr  );
 #endif
 		}

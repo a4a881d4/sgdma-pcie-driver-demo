@@ -1,4 +1,4 @@
-obj-m:=altera_drv.o
+obj-m:=sgdma.o
 #obj-m := dma_test.o
 
 
@@ -12,10 +12,8 @@ clean:
 	$(MAKE) -C $(KDIR) M=$(PWD) clean
 
 test: default
-	sudo dmesg -c && sudo rmmod altera_drv && sudo insmod altera_drv.ko && sudo dmesg -c
+	sudo dmesg -c && sudo rmmod sgdma && sudo insmod sgdma.ko && sudo dmesg -c
 
-dma_test: default
-	sudo dmesg -c && sudo rmmod dma_test && sudo insmod dma_test.ko && sudo dmesg -c
 
 
 .PHONY: test dma_test
