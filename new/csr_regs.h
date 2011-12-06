@@ -125,21 +125,25 @@
 
 inline bool sgdma_read_busy( u32* csr_base )
 {
-	return ( (csr_base)[CSR_STATUS_REG] & CSR_BUSY_MASK) != 0;  // returns '1' when the dispatcher is busy 
+	return ( *(csr_base+CSR_STATUS_REG) & CSR_BUSY_MASK) != 0;  // returns '1' when the dispatcher is busy 
 }
 inline bool sgdma_read_resetting ( u32* csr_base)
 {
-	return ( csr_base[CSR_STATUS_REG] & CSR_RESET_STATE_MASK != 0);  // returns '1' when the SGDMA is in the middle of a reset (read/write masters are still resetting)
+	return ( *(csr_base+CSR_STATUS_REG) & CSR_RESET_STATE_MASK != 0);  // returns '1' when the SGDMA is in the middle of a reset (read/write masters are still resetting)
+}
+inline bool sgdma_clear_status( u32* csr_base )
+{
+	*(csr_base + CSR_STATUS_REG) = 0;  // returns '1' when the dispatcher is busy 
 }
 
-inline void sgdma_clear_irq ( u32* csr_base)
+inline void sgdma_clear_irq ( u32* csr_base)	// also enable irq
 {
-	csr_base[ CSR_STATUS_REG] &= CSR_IRQ_SET_MASK;  // the status register is read/clear only so a read-modify-write is not necessary
+	*(csr_base + CSR_STATUS_REG) |= CSR_IRQ_SET_MASK;  // the status register is read/clear only so a read-modify-write is not necessary
 }
 
 inline void sgdma_reset_dispatcher ( u32* csr_base)
 {
-	csr_base[ CSR_CONTROL_REG ] &= CSR_RESET_MASK;  // setting the reset bit, no need to read the control register first since this write is going to clear it out
+	*(csr_base + CSR_CONTROL_REG ) |= CSR_RESET_MASK;  // setting the reset bit, no need to read the control register first since this write is going to clear it out
 } 
 
 #endif /*CSR_REGS_H_*/
