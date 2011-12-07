@@ -69,7 +69,6 @@ struct CardInfo {
 
 	int  Active, Ready;
 
-	struct tasklet_struct	tasklet;
 	unsigned int dma_status;
 
 	spinlock_t 	lock;
@@ -292,106 +291,6 @@ static int add_bio(struct CardInfo *card)
 	return 1;
 }
 
-static void process_page(unsigned long data)
-{
-	/* check if any of the requests in the page are DMA_COMPLETE,
-	 * and deal with them appropriately.
-	 * If we find a descriptor without DMA_COMPLETE in the semaphore, then
-	 * dma must have hit an error on that descriptor, so use dma_status
-	 * instead and assume that all following descriptors must be re-tried.
-	 */
-	printk(" in process_page !!!\n");
-	printk("%s:%d\n",__FUNCTION__,__LINE__);
-#if 0
-	struct mm_page *page;
-	struct bio *return_bio = NULL;
-	struct CardInfo *card = (struct CardInfo *)data;
-	unsigned int dma_status = card->dma_status;
-
-	spin_lock_bh(&card->lock);
-	if (card->Active < 0)
-		goto out_unlock;
-	page = &card->mm_pages[card->Active];
-
-	while (page->headcnt < page->cnt) {
-		struct bio *bio = page->bio;
-		struct mm_dma_desc *desc = &page->desc[page->headcnt];
-		int control = le32_to_cpu(desc->sem_control_bits);
-		int last = 0;
-		int idx;
-
-		if (!(control & DMASCR_DMA_COMPLETE)) {
-			control = dma_status;
-			last = 1;
-		}
-		page->headcnt++;
-		idx = page->idx;
-		page->idx++;
-		if (page->idx >= bio->bi_vcnt) {
-			page->bio = bio->bi_next;
-			if (page->bio)
-				page->idx = page->bio->bi_idx;
-		}
-
-		pci_unmap_page(card->dev, desc->data_dma_handle,
-			       bio_iovec_idx(bio, idx)->bv_len,
-				 (control & DMASCR_TRANSFER_READ) ?
-				PCI_DMA_TODEVICE : PCI_DMA_FROMDEVICE);
-		if (control & DMASCR_HARD_ERROR) {
-			/* error */
-			clear_bit(BIO_UPTODATE, &bio->bi_flags);
-			dev_printk(KERN_WARNING, &card->dev->dev,
-				"I/O error on sector %d/%d\n",
-				le32_to_cpu(desc->local_addr)>>9,
-				le32_to_cpu(desc->transfer_size));
-			dump_dmastat(card, control);
-		} else if ((bio->bi_rw & REQ_WRITE) &&
-			   le32_to_cpu(desc->local_addr) >> 9 ==
-				card->init_size) {
-			card->init_size += le32_to_cpu(desc->transfer_size) >> 9;
-			if (card->init_size >> 1 >= card->mm_size) {
-				dev_printk(KERN_INFO, &card->dev->dev,
-					"memory now initialised\n");
-				set_userbit(card, MEMORY_INITIALIZED, 1);
-			}
-		}
-		if (bio != page->bio) {
-			bio->bi_next = return_bio;
-			return_bio = bio;
-		}
-
-		if (last)
-			break;
-	}
-
-	if (debug & DEBUG_LED_ON_TRANSFER)
-		set_led(card, LED_REMOVE, LED_OFF);
-
-	if (card->check_batteries) {
-		card->check_batteries = 0;
-		check_batteries(card);
-	}
-	if (page->headcnt >= page->cnt) {
-		reset_page(page);
-		card->Active = -1;
-		activate(card);
-	} else {
-		/* haven't finished with this one yet */
-		pr_debug("do some more\n");
-		mm_start_io(card);
-	}
- out_unlock:
-	spin_unlock_bh(&card->lock);
-
-	while (return_bio) {
-		struct bio *bio = return_bio;
-
-		return_bio = bio->bi_next;
-		bio->bi_next = NULL;
-		bio_endio(bio, 0);
-	}
-#endif
-}
 
 static int alt_make_request(struct request_queue *q, struct bio *bio)
 {
@@ -402,11 +301,52 @@ static int alt_make_request(struct request_queue *q, struct bio *bio)
 
 	spin_lock_irq(&card->lock);
 	*card->biotail = bio;
-	bio->bi_next = NULL;
-	card->biotail = &bio->bi_next;
-	spin_unlock_irq(&card->lock);
+	bio->bi_next = NULL; card->biotail = &bio->bi_next; spin_unlock_irq(&card->lock);
 
 	return 0;
+}
+
+static void blk_request( struct request_queue * q )
+{
+	struct request *req = blk_fetch_request(q);
+	struct CardInfo *_card_info = q->queuedata;
+
+	while( req ) 
+	{
+		int res = -EIO;
+		struct req_iterator iter;
+		struct bio_vec *bvec;
+
+		rq_for_each_segment(bvec, req, iter) {
+			int result = 0 , idx = 0;
+			u64 *kaddr = kmap_atomic(bvec->bv_page, KM_USER0)   +   bvec->bv_offset;
+			int phy_addr = page_to_phys( bvec->bv_page ) + bvec->bv_offset;
+
+			printk( KERN_DEBUG " bvec lenth = %d, offset  %d \n", bvec->bv_len, bvec->bv_offset );
+			switch (rq_data_dir(req)) {
+				case WRITE:
+					printk(" not implement yet \n");
+					break;
+				case READ:
+					sgdma_poll_read( _card_info, phy_addr, bvec->bv_len);
+					break;
+			}
+
+			kunmap_atomic(kaddr, KM_USER0);
+
+		}
+
+
+
+		res = 0;
+
+	done:   
+		/* wrap up, 0 = success, -errno = fail */
+		if (!__blk_end_request_cur(req, res))
+			req = blk_fetch_request(q);
+
+	}
+
 }
 
 static irqreturn_t alt_interrupt(int irq, void *__card)
@@ -543,6 +483,7 @@ static int __devinit alt_pci_probe(struct pci_dev *dev, const struct pci_device_
 	cardinfo.bio = NULL;
 	cardinfo.biotail = &cardinfo.bio;
 
+#if 0
 	cardinfo.queue = blk_alloc_queue(GFP_KERNEL);
 	if (!cardinfo.queue)
 	{
@@ -555,9 +496,16 @@ static int __devinit alt_pci_probe(struct pci_dev *dev, const struct pci_device_
 	cardinfo.queue->queue_lock = &cardinfo.lock;
 	cardinfo.queue->queuedata = &cardinfo;
 
-	tasklet_init(&cardinfo.tasklet, process_page, (unsigned long)(&cardinfo));
 
 	cardinfo.mm_size = 1024 * 128;
+#endif 
+	cardinfo.queue = blk_init_queue( blk_request, & cardinfo.lock );
+	if ( cardinfo.queue == NULL) {
+		printk(KERN_WARNING  " " ALT_DRIVER_NAME ": error in blk_init_queue\n");
+		goto failed_alloc;
+	}
+	cardinfo.queue->queuedata = &cardinfo;
+
 
 /*
 	if (request_irq(dev->irq, alt_interrupt, IRQF_SHARED, ALT_DRIVER_NAME,
@@ -639,8 +587,6 @@ static void alt_pci_remove(struct pci_dev *dev)
 	struct CardInfo *card = pci_get_drvdata(dev);
 	printk(" in pci_remove %d\n",__LINE__);
 
-	tasklet_kill(&card->tasklet);
-//	free_irq(dev->irq, card);
 	iounmap(card->csr_remap);
 
 	printk(" in pci_remove %d\n",__LINE__);

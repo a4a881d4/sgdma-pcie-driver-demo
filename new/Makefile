@@ -1,4 +1,5 @@
-obj-m:=sgdma.o
+#obj-m:=sgdma.o
+obj-m:=altpciechdma.o
 #obj-m := dma_test.o
 
 

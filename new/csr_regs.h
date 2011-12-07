@@ -131,6 +131,10 @@ inline bool sgdma_read_resetting ( u32* csr_base)
 {
 	return ( *(csr_base+CSR_STATUS_REG) & CSR_RESET_STATE_MASK != 0);  // returns '1' when the SGDMA is in the middle of a reset (read/write masters are still resetting)
 }
+inline bool sgdma_read_decriptor_full( u32* csr_base)
+{
+	return ( *(csr_base+CSR_STATUS_REG) & CSR_RESPONSE_BUFFER_FULL_MASK != 0);  // returns '1' when the SGDMA is in the middle of a reset (read/write masters are still resetting)
+}
 inline bool sgdma_clear_status( u32* csr_base )
 {
 	*(csr_base + CSR_STATUS_REG) = 0;  // returns '1' when the dispatcher is busy 
@@ -145,5 +149,60 @@ inline void sgdma_reset_dispatcher ( u32* csr_base)
 {
 	*(csr_base + CSR_CONTROL_REG ) |= CSR_RESET_MASK;  // setting the reset bit, no need to read the control register first since this write is going to clear it out
 } 
+
+// FPGA -> PC
+inline void sgdma_poll_read( u32* csr_base, unsigned long phy_addr, unsigned long length )
+{
+	unsigned long control_bits = (1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
+	printk(" in poll read front\n");
+
+	while ( sgdma_read_decriptor_full(csr_base) ) {}  // spin until there is room for another descriptor to be written to the SGDMA
+
+	//OnRCSlaveWrite(hDev, 2, 0x06000020, read_address[i]);
+	*(csr_base + 0x20 ) =   0x07000000;
+	//OnRCSlaveWrite(hDev, 2, 0x06000024, write_address[i]);
+	*(csr_base + 0x24 ) =   phy_addr;
+	//OnRCSlaveWrite(hDev, 2, 0x06000028, length_mod[i]);
+	*(csr_base + 0x28 ) =   length;
+	//OnRCSlaveWrite(hDev, 2, 0x0600002C, control_bits | (1<<31));
+	*(csr_base + 0x2c ) =   control_bits | (1<<31);
+
+	while ( sgdma_read_decriptor_full(csr_base) ) {
+		printk(" in poll read end\n");
+	}  // spin until there is room for another descriptor to be written to the SGDMA
+	
+	printk(" in poll read last \n");
+}
+// PC -> FPGA
+inline void sgdma_poll_write( u32* csr_base, unsigned long phy_addr, unsigned long length )
+{
+	unsigned long control_bits = (1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
+
+	u32 a2p_mask = *(csr_base + 0x1000);//0x1000 is the offset for translation register 
+	// program address translation table
+	//OnRCSlaveWrite(hDev, 2, 0x1000, phy_addr & a2p_mask); //setting lower address
+	*( csr_base + 0x1000 ) = phy_addr & a2p_mask;
+	//OnRCSlaveWrite(hDev, 2, 0x1004, 0x0); // setting upper address
+	*( csr_base + 0x1004 ) = 0x0;
+	printk(" in poll read front a2p_mask = 0x%x\n",a2p_mask);
+
+
+	while ( sgdma_read_decriptor_full(csr_base) ) {}  // spin until there is room for another descriptor to be written to the SGDMA
+
+	//OnRCSlaveWrite(hDev, 2, 0x06000020, read_address[i]);
+	*(csr_base + 0x20 ) =   phy_addr & ~a2p_mask;
+	//OnRCSlaveWrite(hDev, 2, 0x06000024, write_address[i]);
+	*(csr_base + 0x24 ) =   0x07000000;
+	//OnRCSlaveWrite(hDev, 2, 0x06000028, length_mod[i]);
+	*(csr_base + 0x28 ) =   length;
+	//OnRCSlaveWrite(hDev, 2, 0x0600002C, control_bits | (1<<31));
+	*(csr_base + 0x2c ) =   control_bits | (1<<31);
+
+	while ( sgdma_read_decriptor_full(csr_base) ) {
+		printk(" in poll read end\n");
+	}  // spin until there is room for another descriptor to be written to the SGDMA
+	
+	printk(" in poll read last \n");
+}
 
 #endif /*CSR_REGS_H_*/
