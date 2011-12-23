@@ -96,7 +96,7 @@ void DMA_Read(WDC_DEVICE_HANDLE hDev, unsigned int target_addr, int length){
 				random_data=rand();
 				double tmp = (double)random_data / 17737;
 				DWORD t = tmp * 0xFFFFFFFF;
-				pSBuf[i] = t;
+					pSBuf[i] = t;
 			}else
 				pSBuf[i] = i;
 	}

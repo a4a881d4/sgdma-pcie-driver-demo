@@ -328,7 +328,7 @@ static void blk_request( struct request_queue * q )
 					printk(" not implement yet \n");
 					break;
 				case READ:
-					sgdma_poll_read( _card_info, phy_addr, bvec->bv_len);
+//					sgdma_poll_read( _card_info, phy_addr, bvec->bv_len);
 					break;
 			}
 
@@ -560,16 +560,6 @@ static int __devinit alt_pci_probe(struct pci_dev *dev, const struct pci_device_
 
  failed_req_irq:
  failed_alloc:
-/*
-	if (cardinfo.mm_pages[0].desc)
-		pci_free_consistent(cardinfo.dev, PAGE_SIZE*2,
-				    cardinfo.mm_pages[0].desc,
-				    cardinfo.mm_pages[0].page_dma);
-	if (cardinfo.mm_pages[1].desc)
-		pci_free_consistent(cardinfo.dev, PAGE_SIZE*2,
-				    cardinfo.mm_pages[1].desc,
-				    cardinfo.mm_pages[1].page_dma);
-*/
 	put_disk(alt_gendisk);
  failed_req_blk:
 	unregister_blkdev(major_nr, ALT_DRIVER_NAME);
@@ -585,22 +575,8 @@ static int __devinit alt_pci_probe(struct pci_dev *dev, const struct pci_device_
 static void alt_pci_remove(struct pci_dev *dev)
 {
 	struct CardInfo *card = pci_get_drvdata(dev);
-	printk(" in pci_remove %d\n",__LINE__);
 
 	iounmap(card->csr_remap);
-
-	printk(" in pci_remove %d\n",__LINE__);
-/*
-	if (card->mm_pages[0].desc)
-		pci_free_consistent(card->dev, PAGE_SIZE*2,
-				    card->mm_pages[0].desc,
-				    card->mm_pages[0].page_dma);
-	if (card->mm_pages[1].desc)
-		pci_free_consistent(card->dev, PAGE_SIZE*2,
-				    card->mm_pages[1].desc,
-				    card->mm_pages[1].page_dma);
-*/
-	printk(" in pci_remove %d\n",__LINE__);
 
 	blk_cleanup_queue(card->queue);
 
@@ -611,8 +587,9 @@ static void alt_pci_remove(struct pci_dev *dev)
 	put_disk(alt_gendisk);
 
 	unregister_blkdev(major_nr, ALT_DRIVER_NAME);
-	printk(" in pci_remove %d\n",__LINE__);
 }
+
+
 
 static const struct pci_device_id alt_pci_ids[] = {
   { PCI_DEVICE(0x1172, 0xe001), },
@@ -629,19 +606,16 @@ static struct pci_driver sgdma_pci_driver = {
 	.remove		= alt_pci_remove,
 };
 
+/// Linux Module initial
+
 static int __init sgdma_init(void)
 {
-	int retval;
-
+	int retval; 
 	retval = pci_register_driver(&sgdma_pci_driver);
-	if (retval)
-		return -ENOMEM;
-
+	if (retval) return -ENOMEM; 
 	return 0;
-
 out:
-	pci_unregister_driver(&sgdma_pci_driver);
-
+	pci_unregister_driver(&sgdma_pci_driver); 
 	return -ENOMEM;
 }
 

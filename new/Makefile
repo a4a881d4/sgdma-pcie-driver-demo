@@ -1,7 +1,4 @@
-#obj-m:=sgdma.o
-obj-m:=altpciechdma.o
-#obj-m := dma_test.o
-
+obj-m:=sgdma.o
 
 KDIR  := /lib/modules/$(shell uname -r)/build
 PWD   := $(shell pwd)
