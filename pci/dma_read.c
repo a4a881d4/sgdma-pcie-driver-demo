@@ -126,7 +126,11 @@ u32 __read( u32* __iomem base, u32 addr){
 	return base[ addr / 4 ];
 }
 
-void __write( u8* __iomem base, u32 addr, u32 wdata){
+void __write( u32* __iomem base, u32 addr, u32 wdata){
+
+
+	base[ addr / 4 ] = wdata ;
+	return;
 //   WDC_WriteAddr8(hDev,bar,addr   , wdata    & 0xFF);
 	base[ addr / 4 ] = wdata &0xFF;
 //   WDC_WriteAddr8(hDev,bar,addr+1 , (wdata>>8)  & 0xFF);
@@ -147,16 +151,20 @@ void DMA_Read_Test( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, int l
 	copy_from = kmap_atomic( pc_page, KM_USER1 );
 	u32 control_bits;
 
-	((u32*)copy_from)[ 0 ] = 1234;
-	((u32*)copy_from)[ 1 ] = 5678;
-	printk("  copy_from %x = %d\n", copy_from,  ((u32*)copy_from)[ 0 ] );
-	printk("  copy_from %x = %d\n", copy_from+0x04,  *((u32*)(copy_from+0x04) ) );
 
-	((u32*)copy_from)[ 0 ] = 0x0000;
-	((u32*)copy_from)[ 1 ] = 0xffff;
-	printk("  copy_from %x = %d\n", copy_from,  ((u32*)copy_from)[ 0 ] );
-	printk("  copy_from %x = %d\n", copy_from+0x04,  *((u32*)(copy_from+0x04) ) );
-	printk("  copy_from __pa(%x) = 0x%x\n", copy_from, __pa(copy_from) );
+	if ( 1 )
+	{
+		((u32*)copy_from)[ 0 ] = 1234;
+		((u32*)copy_from)[ 1 ] = 5678;
+		printk("  copy_from %x = %d\n", copy_from,  ((u32*)copy_from)[ 0 ] );
+		printk("  copy_from %x = %d\n", copy_from+0x04,  *((u32*)(copy_from+0x04) ) );
+
+		((u32*)copy_from)[ 0 ] = 0x0000;
+		((u32*)copy_from)[ 1 ] = 0xffff;
+		printk("  copy_from %x = %d\n", copy_from,  ((u32*)copy_from)[ 0 ] );
+		printk("  copy_from %x = %d\n", copy_from+0x04,  *((u32*)(copy_from+0x04) ) );
+		printk("  copy_from __pa(%x) = 0x%x\n", copy_from, __pa(copy_from) );
+	}
 
 
 	// Prepare Data
@@ -196,10 +204,10 @@ void DMA_Read_Test( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, int l
 	}  // spin until there is room for another descriptor to be written to the SGDMA
 	control_bits = (1<<14); //(1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
 
-	__write( bar2, 0x06000020, __pa(copy_from) );
-	__write( bar2, 0x06000024, target_addr);
+	__write( bar2, 0x06000020, __pa(copy_from) & (~a2p_mask) );
+	__write( bar2, 0x06000024, target_addr );
 	__write( bar2, 0x06000028, 1024 );
-	__write( bar2, 0x0600002C, control_bits | (1<<31));
+	__write( bar2, 0x0600002C, control_bits | (1<<31) );
 
 
 	res = __read( bar2, 0x06000000);
@@ -210,11 +218,16 @@ void DMA_Read_Test( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, int l
 		printk(" DMA did not finish\n");
 
 
-	printk(" bar0 %x = %d\n ", target_addr, __read( bar0, target_addr ) );
-	printk(" bar0 %x = %d\n ", target_addr + 0x04, __read( bar0, target_addr + 0x04) );
+	if( 1 )
+	{
+		__write( bar0, target_addr, 0x99887766 );
+		__write( bar0, target_addr+0x4, 0x55443322);
+		printk(" bar0 %x = 0x%x\n ", target_addr, __read( bar0, target_addr ) );
+		printk(" bar0 %x = 0x%x\n ", target_addr + 0x04, __read( bar0, target_addr + 0x04) );
+	}
 
-	kunmap_atomic(copy_from, KM_USER1);
-
+	kunmap_atomic(copy_from, KM_USER1); 
+	free_page( pc_page );
 }
 
 
