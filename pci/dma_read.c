@@ -120,11 +120,43 @@ struct AlteraBlockDevice
 
 } * altera_block_device = NULL;
 
+u32 __read( u32* __iomem base, u32 addr){
+
+//	return *((u32*)(base+addr));
+	return base[ addr / 4 ];
+}
+
+void __write( u8* __iomem base, u32 addr, u32 wdata){
+//   WDC_WriteAddr8(hDev,bar,addr   , wdata    & 0xFF);
+	base[ addr / 4 ] = wdata &0xFF;
+//   WDC_WriteAddr8(hDev,bar,addr+1 , (wdata>>8)  & 0xFF);
+	base[ addr / 4 + 1 ] = (wdata>>8) & 0xFF;
+//   WDC_WriteAddr8(hDev,bar,addr+2 , (wdata>>16) & 0xFF);
+	base[ addr / 4 + 2 ] = (wdata>>16) & 0xFF;
+//   WDC_WriteAddr8(hDev,bar,addr+3 , (wdata>>24) & 0xFF);
+	base[ addr / 4 + 3 ] = (wdata>>24) & 0xFF; 
+}
+
+
 // PC -> FPGA
 void DMA_Read_Test( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, int length )
 {
-	struct page pc_page;
+	void * copy_from;
+	struct page *pc_page;
 	pc_page = alloc_pages(GFP_DMA | GFP_ATOMIC, 2);
+	copy_from = kmap_atomic( pc_page, KM_USER1 );
+	u32 control_bits;
+
+	((u32*)copy_from)[ 0 ] = 1234;
+	((u32*)copy_from)[ 1 ] = 5678;
+	printk("  copy_from %x = %d\n", copy_from,  ((u32*)copy_from)[ 0 ] );
+	printk("  copy_from %x = %d\n", copy_from+0x04,  *((u32*)(copy_from+0x04) ) );
+
+	((u32*)copy_from)[ 0 ] = 0x0000;
+	((u32*)copy_from)[ 1 ] = 0xffff;
+	printk("  copy_from %x = %d\n", copy_from,  ((u32*)copy_from)[ 0 ] );
+	printk("  copy_from %x = %d\n", copy_from+0x04,  *((u32*)(copy_from+0x04) ) );
+	printk("  copy_from __pa(%x) = 0x%x\n", copy_from, __pa(copy_from) );
 
 
 	// Prepare Data
@@ -134,13 +166,13 @@ void DMA_Read_Test( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, int l
 	u32 a2p_mask = __read(bar2, 0x1000);//0x1000 is the offset for translation register
 	// program address translation table
 	// PCIe core limits the data length to be 1MByte, so it only needs 20bits of address.
-	__write( bar2, 0x1000, page_to_phy(pc_page) & a2p_mask); //setting lower address
+	__write( bar2, 0x1000, __pa(copy_from)); //setting lower address
 	__write( bar2, 0x1004, 0x0); // setting upper address   limited at hardIP for now.
 
 	// clear the DMA contoller
 	int res = __read( bar2, 0x06000000);
 	__write( bar2, 0x06000000, 0x200);
-	res = __read(hDev, 2, 0x06000000);
+	res = __read( bar2, 0x06000000);
 	__write( bar2, 0x06000004, 0x02);  // issue reset dispatcher
 	__write( bar2, 0x06000000, 0x0000); //clear all the status
 	__write( bar2, 0x06000004, 0x10); // set IRQ enable
@@ -154,26 +186,34 @@ void DMA_Read_Test( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, int l
         __write( bar2, 0x06000004, irq_mask); //setting the IRQ enable flag at here 
         // clear the status
         int status = __read( bar2, 0x06000000);
-        __write(hDev, 2, 0x06000000, 0x0); //clear all the status
+        __write( bar2, 0x06000000, 0x0); //clear all the status
         status = __read( bar2, 0x06000000);
         
 
-	while (( __read( bar2, 0x06000000) & 0x04) != 0) {}  // spin until there is room for another descriptor to be written to the SGDMA
+	while (( __read( bar2, 0x06000000) & 0x04) != 0) 
+	{
+		printk(" spin until there's room for another desciptor\n");
+	}  // spin until there is room for another descriptor to be written to the SGDMA
 	control_bits = (1<<14); //(1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
 
-	__write( bar2, 0x06000020, read_address[i]);
-	__write( bar2, 0x06000024, write_address[i]);
-	__write( bar2, 0x06000028, length_mod[i]);
+	__write( bar2, 0x06000020, __pa(copy_from) );
+	__write( bar2, 0x06000024, target_addr);
+	__write( bar2, 0x06000028, 1024 );
 	__write( bar2, 0x0600002C, control_bits | (1<<31));
 
 
-	res = __read(hDev, 2, 0x06000000);
+	res = __read( bar2, 0x06000000);
         if(res  == 0x202)  { // At least DMA has finished
 		printk(" DMA finished \n");
         }
 	else
 		printk(" DMA did not finish\n");
 
+
+	printk(" bar0 %x = %d\n ", target_addr, __read( bar0, target_addr ) );
+	printk(" bar0 %x = %d\n ", target_addr + 0x04, __read( bar0, target_addr + 0x04) );
+
+	kunmap_atomic(copy_from, KM_USER1);
 
 }
 
@@ -202,11 +242,11 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 	
 	if(1)
 	{
-		printk(" ------------->bar01 0x%lx \n", pci_resource_flags(dev, 0) );
-		printk(" ------------->bar 1 0x%lx \n", pci_resource_flags(dev, 2) );
+		printk(" ------------->bar 0 0x%lx \n", pci_resource_flags(dev, 0) );
+		printk(" ------------->bar 2 0x%lx \n", pci_resource_flags(dev, 2) );
 
 		printk(" -----len----->bar 0 0x%lx \n", pci_resource_len(dev, 0) );
-		printk(" -----len----->bar 1 0x%lx \n", pci_resource_len(dev, 2) );
+		printk(" -----len----->bar 2 0x%lx \n", pci_resource_len(dev, 2) );
 
 		u32 __iomem * bar0 = ioremap_nocache( pci_resource_start(dev, 0), pci_resource_len(dev, 0) );
 		u32 __iomem * bar2 = ioremap_nocache( pci_resource_start(dev, 2), pci_resource_len(dev, 2) );
