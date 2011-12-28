@@ -1,0 +1,23 @@
+[  191.531556] altera_drv: installing !
+[  191.531582] altera : Device 0x8 has been found at bus 1 dev 0 func 0
+[  191.531599] altera 0000:01:00.0: PCI INT A -> GSI 16 (level, low) -> IRQ 16
+[  191.531601] pci_enable_device = 0 rev=5
+[  191.531603]  ------------->bar01 0x40200 
+[  191.531604]  ------------->bar 2 0x0 
+[  191.531606]  -----len----->bar 0 0x10 
+[  191.531608]  -----len----->bar 1 0x20 
+[  191.531771]  resource_start ==> fe5ff000, ram_base =ffffc900114f6000
+[  191.531776]  rom[0x0] = 0x91827364 
+[  191.531779]  rom[0x1] = 0x55667788 
+[  191.531782]  rom[0x2] = 0x99aabbcc 
+[  191.531785]  rom[0x3] = 0xddeeff00 
+[  191.531788]  rom[0x4] = 0x0 
+[  191.531791]  rom[0x5] = 0x0 
+[  191.531794]  rom[0x6] = 0x0 
+[  191.531797]  rom[0x7] = 0x0 
+[  191.531800]  hey i'm here in probing 
+
+
+two ocm on bar1
+a 0x00 ~ 0x0f
+b 0x10 ~ 0x1f

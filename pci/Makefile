@@ -1,4 +1,4 @@
-obj-m:=dma_read.o
+obj-m:=dma_read2.o
 #obj-m := dma_test.o
 
 
