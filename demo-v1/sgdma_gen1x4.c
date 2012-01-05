@@ -1,3 +1,10 @@
+// this test case is test and pass in FEDORA 15 32bit system.
+// please add this two options into grub booting commands.
+// /etc/grub.conf :  vmalloc=512MB intel_iommu=off
+// vmalloc for large virtual addressing
+// intel_iommu for disable intel chipset protection
+//
+
 #include <linux/fs.h>
 #include <linux/module.h>                         // MOD_DEVICE_TABLE,
 #include <linux/init.h>
@@ -160,41 +167,41 @@ void DMA_Test_PC2FPGA( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, in
 	__write( bar2, 0x1004, 0x0); // setting upper address   limited at hardIP for now.
 
 	// clear the DMA contoller
-	res = __read( bar2, 0x00004000);
-	__write( bar2, 0x00004000, 0x200);
-	res = __read( bar2, 0x00004000);
-	__write( bar2, 0x00004004, 0x02);  // issue reset dispatcher
-	__write( bar2, 0x00004000, 0x0000); //clear all the status
-	__write( bar2, 0x00004004, 0x10); // set IRQ enable
-	res = __read( bar2, 0x00004000);
+	res = __read( bar2, ADDR_CSR);
+	__write( bar2, ADDR_CSR, 0x200);
+	res = __read( bar2, ADDR_CSR);
+	__write( bar2, ADDR_CSR+0x04, 0x02);  // issue reset dispatcher
+	__write( bar2, ADDR_CSR, 0x0000); //clear all the status
+	__write( bar2, ADDR_CSR+0x04, 0x10); // set IRQ enable
+	res = __read( bar2, ADDR_CSR);
 	printk(" after reset %x\n", res);
 	
 
 	
         //enable_global_interrupt_mask (alt_u32 csr_base)
-        irq_mask = __read( bar2, 0x00004004);
+        irq_mask = __read( bar2, ADDR_CSR+0x04);
         irq_mask |= 0x10;
-        __write( bar2, 0x00004004, irq_mask); //setting the IRQ enable flag at here 
-	res = __read( bar2, 0x00004004);
+        __write( bar2, ADDR_CSR+0x04, irq_mask); //setting the IRQ enable flag at here 
+	res = __read( bar2, ADDR_CSR+0x04);
         // clear the status
-        status = __read( bar2, 0x00004000);
-        __write( bar2, 0x00004000, 0x0); //clear all the status
-        status = __read( bar2, 0x00004000);
+        status = __read( bar2, ADDR_CSR);
+        __write( bar2, ADDR_CSR, 0x0); //clear all the status
+        status = __read( bar2, ADDR_CSR);
         
 
-	while (( __read( bar2, 0x00004000) & 0x04) != 0) {
+	while (( __read( bar2, ADDR_CSR) & 0x04) != 0) {
 		printk(" spin until there's room for another desciptor\n");
 	}  // spin until there is room for another descriptor to be written to the SGDMA
 	control_bits = (1<<14); //(1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
 
-	__write( bar2, 0x00004020, __pa(copy_from) & (~a2p_mask) );
-	__write( bar2, 0x00004024, target_addr );
-	__write( bar2, 0x00004028, length);
-	__write( bar2, 0x0000402C, control_bits | (1<<31) );	// go
+	__write( bar2, ADDR_DES, __pa(copy_from) & (~a2p_mask) );
+	__write( bar2, ADDR_DES + 4, target_addr );
+	__write( bar2, ADDR_DES + 8, length);
+	__write( bar2, ADDR_DES + 0xC, control_bits | (1<<31) );	// go
 
 
 	for( idx = 0 ; idx < 50 ; idx ++ ) {
-		res = __read( bar2, 0x00004000);
+		res = __read( bar2, ADDR_CSR);
 		if(res  == 0x202)  { // At least DMA has finished
 			printk(" DMA finished \n");
 			break;
@@ -220,6 +227,182 @@ err:
 //	free_page( pc_page );
 }
 
+// FPGA -> FPGA
+void DMA_Test_FPGA2FPGA( u32* __iomem bar0, u32* __iomem bar2, u32 target_addr, u32 copy_from, int length )
+{
+	u32 control_bits, a2p_mask, res, irq_mask ,status; 
+	u32 idx = 0;
+
+	// prepare copy from patterns
+	for( idx = 0 ; patterns[ idx ] ; idx ++ ) {
+		*(bar0 + copy_from/4 + idx ) = patterns[idx];
+	}
+
+	// Prepare Data 
+	__write( bar2, 0x1000, 0xFFFFFFFC);
+	a2p_mask = __read(bar2, 0x1000);//0x1000 is the offset for translation register
+	// program address translation table
+	// PCIe core limits the data length to be 1MByte, so it only needs 20bits of address.
+	if(a2p_mask == 0 ) {
+		printk(" !!!!!!!!!!!!!!!!!!!!!!!!!error!!!!!!!!!!!!!!!!! a2p_mask = 0x%x\n", a2p_mask );
+		goto err;
+	}
+	else
+		printk("  a2p_mask = 0x%x\n", a2p_mask );
+
+	__write( bar2, 0x1000, __pa(copy_from) & a2p_mask); //setting lower address
+	__write( bar2, 0x1004, 0x0); // setting upper address   limited at hardIP for now.
+
+	// clear the DMA contoller
+	res = __read( bar2, ADDR_CSR);
+	__write( bar2, ADDR_CSR, 0x200);
+	res = __read( bar2, ADDR_CSR);
+	__write( bar2, ADDR_CSR+0x04, 0x02);  // issue reset dispatcher
+	__write( bar2, ADDR_CSR, 0x0000); //clear all the status
+	__write( bar2, ADDR_CSR+0x04, 0x10); // set IRQ enable
+	res = __read( bar2, ADDR_CSR);
+	printk(" after reset %x\n", res);
+	
+
+	
+        //enable_global_interrupt_mask (alt_u32 csr_base)
+        irq_mask = __read( bar2, ADDR_CSR+0x04);
+        irq_mask |= 0x10;
+        __write( bar2, ADDR_CSR+0x04, irq_mask); //setting the IRQ enable flag at here 
+	res = __read( bar2, ADDR_CSR+0x04);
+        // clear the status
+        status = __read( bar2, ADDR_CSR);
+        __write( bar2, ADDR_CSR, 0x0); //clear all the status
+        status = __read( bar2, ADDR_CSR);
+        
+
+	while (( __read( bar2, ADDR_CSR) & 0x04) != 0) {
+		printk(" spin until there's room for another desciptor\n");
+	}  // spin until there is room for another descriptor to be written to the SGDMA
+	control_bits = (1<<14); //(1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
+
+	__write( bar2, ADDR_DES, copy_from );
+	__write( bar2, ADDR_DES + 4, target_addr );
+	__write( bar2, ADDR_DES + 8, length);
+	__write( bar2, ADDR_DES + 0xC, control_bits | (1<<31) );	// go
+
+
+	for( idx = 0 ; idx < 50 ; idx ++ ) {
+		res = __read( bar2, ADDR_CSR);
+		if(res  == 0x202)  { // At least DMA has finished
+			printk(" DMA finished \n");
+			break;
+		}
+		else
+			printk(" DMA did not finish CSR/Status 0x%04x\n",res);
+	}
+
+	res = 0;
+	for( idx = 0 ; patterns[ idx ] ; idx ++ )
+	{
+		if(  __read( bar0, target_addr + idx*0x04 ) == patterns[idx] ) {
+			printk(" DMA test pass (%d)\n", idx );
+		} else {	
+			printk(" DMA error !!! Patterns dismatch idx=%d expect=0x%x but get 0x%x\n",idx, patterns[idx],  __read( bar0, target_addr + idx*0x04 ));
+			res = 1;
+		}
+	}
+	if( res == 0)
+		printk(" DMA Read / FPGA -> FPGA success\n");
+err:
+	return;
+}
+// FPGA -> PC
+void DMA_Test_FPGA2PC( u32* __iomem bar0, u32* __iomem bar2, u32 copy_from, int length )
+{
+	u32 control_bits, a2p_mask, res, irq_mask ,status; 
+	struct page *pc_page = NULL;
+	u32* target_to = 0;
+	u32 idx = 0;
+
+	pc_page = alloc_pages(GFP_ATOMIC, 2);
+	target_to = kmap_atomic( pc_page, KM_USER1 );
+
+	// prepare copy from patterns
+	for( idx = 0 ; patterns[ idx ] ; idx ++ ) {
+		*(bar0 + copy_from/4 + idx ) = patterns[idx];
+	}
+
+	// Prepare Data 
+	__write( bar2, 0x1000, 0xFFFFFFFC);
+	a2p_mask = __read(bar2, 0x1000);//0x1000 is the offset for translation register
+	// program address translation table
+	// PCIe core limits the data length to be 1MByte, so it only needs 20bits of address.
+	if(a2p_mask == 0 ) {
+		printk(" !!!!!!!!!!!!!!!!!!!!!!!!!error!!!!!!!!!!!!!!!!! a2p_mask = 0x%x\n", a2p_mask );
+		goto err;
+	}
+	else
+		printk("  a2p_mask = 0x%x\n", a2p_mask );
+
+	__write( bar2, 0x1000, __pa(target_to) & a2p_mask); //setting lower address
+	__write( bar2, 0x1004, 0x0); // setting upper address   limited at hardIP for now.
+
+	// clear the DMA contoller
+	res = __read( bar2, ADDR_CSR);
+	__write( bar2, ADDR_CSR, 0x200);
+	res = __read( bar2, ADDR_CSR);
+	__write( bar2, ADDR_CSR+0x04, 0x02);  // issue reset dispatcher
+	__write( bar2, ADDR_CSR, 0x0000); //clear all the status
+	__write( bar2, ADDR_CSR+0x04, 0x10); // set IRQ enable
+	res = __read( bar2, ADDR_CSR);
+	printk(" after reset %x\n", res);
+	
+
+	
+        //enable_global_interrupt_mask (alt_u32 csr_base)
+        irq_mask = __read( bar2, ADDR_CSR+0x04);
+        irq_mask |= 0x10;
+        __write( bar2, ADDR_CSR+0x04, irq_mask); //setting the IRQ enable flag at here 
+	res = __read( bar2, ADDR_CSR+0x04);
+        // clear the status
+        status = __read( bar2, ADDR_CSR);
+        __write( bar2, ADDR_CSR, 0x0); //clear all the status
+        status = __read( bar2, ADDR_CSR);
+        
+
+	while (( __read( bar2, ADDR_CSR) & 0x04) != 0) {
+		printk(" spin until there's room for another desciptor\n");
+	}  // spin until there is room for another descriptor to be written to the SGDMA
+	control_bits = (1<<14); //(1 << 24);  // 14bit is the IRQ, 24bit is the early done bit
+
+	__write( bar2, ADDR_DES, copy_from);
+	__write( bar2, ADDR_DES + 4, __pa(target_to) & (~a2p_mask) );
+	__write( bar2, ADDR_DES + 8, length);
+	__write( bar2, ADDR_DES + 0xC, control_bits | (1<<31) );	// go
+
+
+	for( idx = 0 ; idx < 50 ; idx ++ ) {
+		res = __read( bar2, ADDR_CSR);
+		if(res  == 0x202)  { // At least DMA has finished
+			printk(" DMA finished \n");
+			break;
+		}
+		else
+			printk(" DMA did not finish CSR/Status 0x%04x\n",res);
+	}
+
+	res = 0;
+	for( idx = 0 ; patterns[ idx ] ; idx ++ )
+	{
+		if(  target_to[idx] == patterns[idx] ) {
+			printk(" DMA test pass (%d)\n", idx );
+		} else {	
+			printk(" DMA error !!! Patterns dismatch idx=%d expect=0x%x but get 0x%x\n",idx, patterns[idx], target_to[idx]);
+			res = 1;
+		}
+	}
+	if( res == 0)
+		printk(" DMA Read / FPGA -> PC Memory success\n");
+err:
+	kunmap_atomic(target_to, KM_USER1); 
+//	free_page( pc_page );
+}
 
 static
 int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id *id)
@@ -246,15 +429,16 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 
 	printk(" pci/fpga device rev id = 0x%x\n",dev->revision);
 
-	u32 __iomem * bar0 = ioremap_nocache( pci_resource_start(dev, 0), pci_resource_len(dev, 0) );
-	u32 __iomem * bar2 = ioremap_nocache( pci_resource_start(dev, 2), pci_resource_len(dev, 2) ); 
+	u32 __iomem * bar0 = ioremap_nocache( pci_resource_start(dev, DIR_BAR_NR), pci_resource_len(dev, DIR_BAR_NR) );
+	u32 __iomem * bar2 = ioremap_nocache( pci_resource_start(dev, CSR_BAR_NR), pci_resource_len(dev, CSR_BAR_NR) ); 
 
-	DMA_Test_PC2FPGA( bar0, bar2, 0x02000000 , 512 ); 
+	DMA_Test_PC2FPGA( bar0, bar2, ADDR_OCM , 512 ); 
+//	DMA_Test_FPGA2FPGA( bar0, bar2, ADDR_OCM, ADDR_OCM+0x20000 , 512 ); 
+//	DMA_Test_FPGA2PC( bar0, bar2, ADDR_OCM , 512 ); 
 
 	iounmap( bar0 );
 	iounmap( bar2 ); 
-	// try to access FPGA via BAR (end)
-
+	// try to access FPGA via BAR (end) 
 
 	printk(" end of probing (success)\n");
 	return (0);
