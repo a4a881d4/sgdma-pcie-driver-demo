@@ -254,6 +254,8 @@ int handler_altera_device_probe(struct pci_dev *dev, const struct pci_device_id 
 		return err;
 	}
 
+	pci_set_master(dev);
+	pci_set_mwi( dev );
 	
 	if(1)
 	{

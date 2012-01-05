@@ -1,0 +1,15 @@
+[  439.096373] sgdma_gen1x4: installing !
+[  439.096395] altera : Device 0xe001 has been found at bus 1 dev 0 func 0
+[  439.096406] altera 0000:01:00.0: PCI INT A -> GSI 16 (level, low) -> IRQ 16
+[  439.096409] pci_enable_device = 0 rev=19
+[  439.096410]  pci/fpga device rev id = 0x13
+[  439.107966]   a2p_mask = 0xff000000
+[  439.107969]  after reset 2
+[  439.107973]  DMA did not finish CSR/Status 0x0002
+[  439.107975]  DMA finished 
+[  439.107978]  DMA test pass (0)
+[  439.107980]  DMA test pass (1)
+[  439.107982]  DMA test pass (2)
+[  439.107983]  DMA test pass (3)
+[  439.107984]  DMA Read / PC Memory -> FPGA success
+[  439.113232]  end of probing (success)
