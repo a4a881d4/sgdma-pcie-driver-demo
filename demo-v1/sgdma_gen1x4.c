@@ -61,11 +61,11 @@
 
 
 // Please reference Qsys setting
-#define ADDR_OCM	0x02000000	// ~ 0x0203ffff
-#define ADDR_DDR	0x04000000	// ~ 0x07ffffff
+#define ADDR_OCM	0x07000000	// ~ 0x0203ffff
+#define ADDR_DDR	0x08000000	// ~ 0x07ffffff
 #define ADDR_CRA	0x00000000	// ~ 0x00003fff
-#define	ADDR_CSR	0x00004000	// ~ 0x0000401f
-#define	ADDR_DES	0x00004020	// ~ 0x0000402f
+#define	ADDR_CSR	0x06000000	// ~ 0x0000401f
+#define	ADDR_DES	0x06000020	// ~ 0x0000402f
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("kfchou at altera.com");
